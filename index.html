@@ -135,7 +135,6 @@
 
     let fileName = '';
     let stage = 'init';
-    const imagePromises = [];
     let spinnerIntervalId = null;
     let processTextTimeout = null;
     let processTextWaitlist = [];
@@ -257,22 +256,14 @@
             let newPdfBlob;
             if (imgs === false) {
                 processTextSet('Non-scanned PDF, only metadata removed.', 'warn');
-                // only clear metadata
                 const originalPdfDoc = await PDFDocument.load(buffer);
                 newPdfBlob = await cleanSavePdf(originalPdfDoc);
             } else if (imgs.length === 0) {
                 processTextSet('No images extracted');
                 return;
             } else {
-                processTextSet('collecting...');
-                // wait for all image promises to resolve
-                await Promise.all(imagePromises);
-                // wait 2s
-                // await new Promise(resolve => setTimeout(resolve, 2000));
-                // create new PDF
-                const newPdf = await createNewPdf(imgs);
-                // save
                 processTextSet('saving...');
+                const newPdf = await createNewPdf(imgs);
                 newPdfBlob = await cleanSavePdf(newPdf);
             }
             processDiv.style.cursor = 'pointer';
@@ -316,11 +307,8 @@
         for (let curPage = 1; curPage <= numPages; curPage++) {
             processTextSet(`extracting ${curPage} / ${numPages}`);
             const page = await pdf.getPage(curPage);
-
-
             const scale = 1.5;
             const viewport = page.getViewport({ scale });
-            // Support HiDPI-screens.
             const outputScale = window.devicePixelRatio || 1;
             const canvas = new OffscreenCanvas(200, 200);
             const context = canvas.getContext("2d");
@@ -346,10 +334,10 @@
                 return acc;
             }, []);
             let largestImage = null;
-            for (const imageName of imageNames) {
-                const processImage = (async () => {
+            for await (const imageName of imageNames) {
+                const processImage = await (async () => {
                     try {
-                        const image = await getImageBitmap(page, imageName);
+                        const image = await page.objs.get(imageName);
                         const bmp = image.bitmap;
                         const maxPixelWidth = 1931
                         const maxPixelHeight = 2732
@@ -380,9 +368,7 @@
                         // console.warn(`Image extraction failed for ${imageName}:`, err);
                     }
                 })();
-                imagePromises.push(processImage);
             }
-            await new Promise(resolve => setTimeout(resolve, 60));
 
             // check if scanned
             if (!largestImage) {
@@ -409,22 +395,6 @@
             }
         }
         return extractedImages;
-    }
-
-    function getImageBitmap(page, imageName, timeout = 2000) {
-        return new Promise((resolve, reject) => {
-            let resolved = false;
-            const timer = setTimeout(() => {
-                if (!resolved) {
-                    reject(new Error(`Timeout getting image: ${imageName}`));
-                }
-            }, timeout);
-            page.objs.get(imageName, (image) => {
-                resolved = true;
-                clearTimeout(timer);
-                resolve(image);
-            });
-        });
     }
 
     async function createNewPdf(extractedImages) {
@@ -498,7 +468,6 @@
                 infoDict.delete(fieldName);
             }
         });
-        await new Promise(resolve => setTimeout(resolve, 120));
         const pdfBytes = await pdfDoc.save({
             useObjectStreams: true // use object streams for better compression
         });

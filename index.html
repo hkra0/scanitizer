@@ -335,7 +335,9 @@
             }, []);
             let largestImage = null;
             for await (const imageName of imageNames) {
-                const processImage = await (async () => {
+                if (!imageName.startsWith("g_")) {
+                    // object name start with "g_" is repeated image
+                    // ref: https://github.com/mozilla/pdf.js/issues/13742
                     try {
                         const image = await page.objs.get(imageName);
                         const bmp = image.bitmap;
@@ -365,9 +367,9 @@
                             };
                         }
                     } catch (err) {
-                        // console.warn(`Image extraction failed for ${imageName}:`, err);
+                        console.warn(`Image extraction failed for ${imageName}:`, err);
                     }
-                })();
+                }
             }
 
             // check if scanned

@@ -238,7 +238,8 @@
                         updatePassword(password);
                     } else {
                         processTextSet('password not provided');
-                        stopSpinner()
+                        stopSpinner();
+                        resetButton.style.display = 'inline-block';
                     }
                 } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
                     // wrong password

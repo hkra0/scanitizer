@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>🔪(๑- . -๑)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.10.111/pdf.js"></script>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.10.111/build/pdf.worker.js';
+    </script>
+    <style>
+        * {
+            color-scheme: dark;
+        }
+
+        :root {
+            background-color: #080808;
+        }
+
+        body {
+            font-family: 'consolas', monospace;
+            background: #181818;
+            color: #c3c3c3;
+            max-width: 480px;
+            margin: 4rem auto;
+            padding: 2rem;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        #c {
+            color: #a44;
+            transition: all .5s ease-in-out;
+        }
+
+        #tinyko {
+            text-align: center;
+            font-size: 2rem;
+            font-family: 'Segoe UI', monospace;
+            margin-bottom: 2rem;
+        }
+
+        #processDiv {
+            margin: 1.5rem 0;
+            padding: 0.75rem;
+            background: #242424;
+            border-left: 4px solid #a44;
+            font-size: 0.95rem;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #processDiv:hover {
+            background: #2a2a2a;
+        }
+
+        #processText {
+            text-decoration: underline;
+        }
+
+        #reset {
+            cursor: pointer;
+            position: absolute;
+            right: 0.5rem;
+            top: 50%;
+            transform: translateY(-50%);
+            transition: all 0.2s ease-in-out;
+        }
+
+        #reset:hover {
+            color: #a44;
+        }
+
+        footer {
+            margin-top: 3rem;
+            font-size: 0.8rem;
+            color: #aaa;
+            text-align: center;
+        }
+
+        a {
+            color: #aaa;
+            transition: all 0.2s ease-in-out;
+        }
+
+        a:hover {
+            color: #a44;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>s<span id="c">c</span>anitizer</h1>
+    <div id="tinyko">🔪(๑- . -๑)</div>
+    <input type="file" id="fileInput" accept=".pdf" style="display: none;" />
+    <div style="position: relative;">
+        <div id="processDiv">
+            <span id="spinner">> </span><span id="processText">select PDF file</span>
+        </div>
+        <span id="reset" style="display: none;">
+            <svg style="width: 1.2em; height: 1.2em;" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                </path>
+            </svg>
+        </span>
+    </div>
+    <a href="#" id="downloadLink" style="display: none;">download cleaned PDF</a>
+
+    <footer>
+        For scanned PDF cleanup.
+        <a href="https://github.com/AFXR17light/scanitizer" target="_blank">Github</a>
+    </footer>
+</body>
+
+<script>
+    const { PDFDocument, PDFName } = PDFLib;
+
+    const fileInput = document.getElementById('fileInput');
+    const processDiv = document.getElementById('processDiv');
+    const processText = document.getElementById('processText');
+    const spinner = document.getElementById('spinner');
+    const downloadLink = document.getElementById('downloadLink');
+    const c = document.getElementById('c');
+    const tinyko = document.getElementById('tinyko');
+    const resetButton = document.getElementById('reset');
+
+    let fileName = '';
+    let stage = 'init';
+    const imagePromises = [];
+    let spinnerIntervalId = null;
+    let processTextTimeout = null;
+    let processTextWaitlist = [];
+
+    fileInput.addEventListener("change", main);
+    processDiv.addEventListener("click", handleProcessClick);
+    resetButton.addEventListener("click", reset);
+
+    function reset() {
+        stopSpinner();
+        clearTimeout(processTextTimeout);
+        processTextTimeout = null;
+        fileInput.value = '';
+        processTextSet('select PDF file', 'io');
+        processDiv.style.cursor = 'pointer';
+        downloadLink.style.display = 'none';
+        c.style.color = '#a44';
+        tinyko.innerText = '🔪(๑- . -๑)';
+        document.title = '🔪(๑- . -๑)';
+        resetButton.style.display = 'none';
+        stage = 'init';
+    }
+
+    function startSpinner() {
+        const spinnerChars = ['|  ', '/  ', '-  ', '\\  '];
+        let index = 0;
+        spinnerIntervalId = setInterval(() => {
+            spinner.innerText = `${spinnerChars[index]}`;
+            index = (index + 1) % spinnerChars.length;
+        }, 200);
+    }
+
+    function stopSpinner() {
+        clearInterval(spinnerIntervalId);
+        spinner.innerText = '> ';
+    }
+
+    function processTextSet(text, level) {
+        const timeout = 2000;
+        if (!processTextTimeout && (!level || level === 'proc')) {
+            // proc
+            processText.style.textDecoration = 'none';
+            processText.style.color = '';
+            processText.innerText = text;
+        }
+        if (processTextTimeout && level === 'warn') {
+            // warn (add to waitlist)
+            processTextWaitlist.push([text, 'warn']);
+        }
+        if (!processTextTimeout && level === 'warn') {
+            // warn (start timeout)
+            processText.style.textDecoration = 'none';
+            processText.style.color = '#a44';
+            processText.innerText = text;
+            processTextTimeout = setTimeout(() => {
+                const nextText = processTextWaitlist.shift();
+                processTextTimeout = null;
+                if (nextText) {
+                    processTextSet(...nextText);
+                }
+
+            }, timeout);
+        }
+        if (level === 'io') {
+            // input output
+            if (processTextTimeout) {
+                processTextWaitlist.push([text, 'io']);
+            } else {
+                processText.style.textDecoration = 'underline';
+                processText.style.color = '';
+                processText.innerText = text;
+            }
+        }
+    }
+
+    function main() {
+        startSpinner();
+        stage = 'processing';
+        c.style.color = '#a44';
+        tinyko.innerText = '🔪(๑- . -๑)';
+        document.title = '🔪(๑- . -๑)';
+        processDiv.style.cursor = 'wait';
+        downloadLink.style.display = 'none';
+        if (fileInput.files.length === 0) {
+            processTextSet('No file selected');
+            return;
+        }
+        fileName = fileInput.files[0].name;
+        const file = fileInput.files[0];
+        const fileReader = new FileReader();
+        fileReader.onload = async function () {
+            const buffer = this.result;
+            const safeBuffer = buffer.slice(0);
+            const loadingTask = pdfjsLib.getDocument(safeBuffer);
+            loadingTask.onPassword = function (updatePassword, reason) {
+                if (reason === pdfjsLib.PasswordResponses.NEED_PASSWORD) {
+                    // require password
+                    const password = prompt('PDF password');
+                    if (password) {
+                        updatePassword(password);
+                    } else {
+                        processTextSet('password not provided');
+                    }
+                } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
+                    // wrong password
+                    const password = prompt('incorrect password');
+                    if (password) {
+                        updatePassword(password);
+                    } else {
+                        processTextSet('password not provided');
+                    }
+                }
+            };
+            const pdf = await loadingTask.promise;
+            const imgs = await extractImages(pdf);
+            let newPdfBlob;
+            if (imgs === false) {
+                processTextSet('Non-scanned PDF, only metadata removed.', 'warn');
+                // only clear metadata
+                const originalPdfDoc = await PDFDocument.load(buffer);
+                newPdfBlob = await cleanSavePdf(originalPdfDoc);
+            } else if (imgs.length === 0) {
+                processTextSet('No images extracted');
+                return;
+            } else {
+                processTextSet('collecting...');
+                // wait for all image promises to resolve
+                await Promise.all(imagePromises);
+                // wait 2s
+                // await new Promise(resolve => setTimeout(resolve, 2000));
+                // create new PDF
+                const newPdf = await createNewPdf(imgs);
+                // save
+                processTextSet('saving...');
+                newPdfBlob = await cleanSavePdf(newPdf);
+            }
+            processDiv.style.cursor = 'pointer';
+            resetButton.style.display = 'inline-block';
+            stage = 'done';
+            stopSpinner();
+            // create a URL for the new PDF blob
+            if (newPdfBlob instanceof Blob) {
+                const url = URL.createObjectURL(newPdfBlob);
+                // set the download link
+                downloadLink.href = url;
+                const baseName = fileName.replace(/\.pdf$/i, '');
+                downloadLink.download = `${baseName}_c.pdf`;
+                c.style.color = '#c3c3c3';
+                processTextSet('download cleaned PDF', 'io');
+                setTimeout(() => {
+                    tinyko.innerText = '🔪(๑• . •๑)';
+                    document.title = '🔪(๑• . •๑)';
+                }, 300);
+            } else {
+                processTextSet('PDF creation failed', 'warn');
+            }
+            pdf.destroy();
+        };
+        fileReader.readAsArrayBuffer(file);
+    }
+
+    function handleProcessClick() {
+        if (stage === 'init') {
+            fileInput.click();
+        } else if (stage === 'done') {
+            downloadLink.click();
+        }
+    }
+
+    async function extractImages(pdf) {
+        const numPages = pdf.numPages;
+        const extractedImages = [];
+        let textedCount = 0; // texted PDF count
+        let nonScannedCount = 0; // non-scanned PDF count
+        for (let curPage = 1; curPage <= numPages; curPage++) {
+            processTextSet(`extracting ${curPage} / ${numPages}`);
+            const page = await pdf.getPage(curPage);
+
+
+            const scale = 1.5;
+            const viewport = page.getViewport({ scale });
+            // Support HiDPI-screens.
+            const outputScale = window.devicePixelRatio || 1;
+            const canvas = new OffscreenCanvas(200, 200);
+            const context = canvas.getContext("2d");
+            const transform = outputScale !== 1
+                ? [outputScale, 0, 0, outputScale, 0, 0]
+                : null;
+
+            const renderContext = {
+                canvasContext: context,
+                transform,
+                viewport,
+            };
+            // render
+            const renderTask = page.render(renderContext);
+            // await new Promise(resolve => setTimeout(resolve, 500)); // add delay for performance
+            await renderTask.promise;
+            // get operator list
+            const ops = await page.getOperatorList();
+            const imageNames = ops.fnArray.reduce((acc, curr, i) => {
+                if ([pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintJpegXObject].includes(curr)) {
+                    acc.push(ops.argsArray[i][0]);
+                }
+                return acc;
+            }, []);
+            let largestImage = null;
+            for (const imageName of imageNames) {
+                const processImage = (async () => {
+                    try {
+                        const image = await getImageBitmap(page, imageName);
+                        const bmp = image.bitmap;
+                        const maxPixelWidth = 1931
+                        const maxPixelHeight = 2732
+                        // scale
+                        const scale = Math.min(
+                            1,
+                            maxPixelWidth / bmp.width,
+                            maxPixelHeight / bmp.height
+                        );
+                        const targetWidth = Math.round(bmp.width * scale);
+                        const targetHeight = Math.round(bmp.height * scale);
+                        const canvas = new OffscreenCanvas(targetWidth, targetHeight);
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(bmp, 0, 0, targetWidth, targetHeight);
+                        const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
+                        if ((targetWidth > 300 && targetHeight > 300)
+                            && blob.size > 10000
+                            && (!largestImage || (largestImage.width * largestImage.height < targetWidth * targetHeight))) {
+                            largestImage = {
+                                page: curPage,
+                                blob: blob,
+                                width: targetWidth,
+                                height: targetHeight,
+                                viewport: viewport
+                            };
+                        }
+                    } catch (err) {
+                        // console.warn(`Image extraction failed for ${imageName}:`, err);
+                    }
+                })();
+                imagePromises.push(processImage);
+            }
+            await new Promise(resolve => setTimeout(resolve, 60));
+
+            // check if scanned
+            if (!largestImage) {
+                nonScannedCount++;
+            } else {
+                extractedImages.push(largestImage);
+            }
+
+            // check if texted
+            if (textedCount < Math.min(3, numPages)) {
+                const textContent = await page.getTextContent();
+                if (textContent.items.length > 20) {
+                    textedCount++;
+                }
+            }
+
+            if (nonScannedCount >= Math.min(3, numPages)) {
+                // non-scanned PDF
+                return false;
+            } else if (textedCount >= Math.min(3, numPages)) {
+                // PDF texted
+                processTextSet(`text content not reserved`, 'warn');
+                textedCount = null;
+            }
+        }
+        return extractedImages;
+    }
+
+    function getImageBitmap(page, imageName, timeout = 2000) {
+        return new Promise((resolve, reject) => {
+            let resolved = false;
+            const timer = setTimeout(() => {
+                if (!resolved) {
+                    reject(new Error(`Timeout getting image: ${imageName}`));
+                }
+            }, timeout);
+            page.objs.get(imageName, (image) => {
+                resolved = true;
+                clearTimeout(timer);
+                resolve(image);
+            });
+        });
+    }
+
+    async function createNewPdf(extractedImages) {
+        if (extractedImages.length === 0) {
+            processTextSet('No images extracted');
+            return;
+        }
+        const pdfDoc = await PDFDocument.create();
+        // standard A4 dimensions (points)
+        const PORTRAIT_WIDTH = 595;
+        const PORTRAIT_HEIGHT = 842;
+        const LANDSCAPE_WIDTH = PORTRAIT_HEIGHT;
+        const LANDSCAPE_HEIGHT = PORTRAIT_WIDTH;
+        extractedImages.sort((a, b) => a.page - b.page);
+        for (const img of extractedImages) {
+            processTextSet(`processing ${img.page} / ${extractedImages.length}`);
+            const arrayBuffer = await img.blob.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+            let pdfImage;
+            if (img.blob.type === 'image/jpeg') {
+                pdfImage = await pdfDoc.embedJpg(uint8Array);
+            } else {
+                pdfImage = await pdfDoc.embedPng(uint8Array);
+            }
+            // get original image dimensions
+            const imgWidth = pdfImage.width;
+            const imgHeight = pdfImage.height;
+            // decide orientation
+            const isLandscape = imgWidth > imgHeight;
+            const pageWidth = isLandscape ? LANDSCAPE_WIDTH : PORTRAIT_WIDTH;
+            const pageHeight = isLandscape ? LANDSCAPE_HEIGHT : PORTRAIT_HEIGHT;
+            // create page
+            const page = pdfDoc.addPage([pageWidth, pageHeight]);
+            const MARGIN = 20;
+            const maxWidth = pageWidth - 2 * MARGIN;
+            const maxHeight = pageHeight - 2 * MARGIN;
+            // scale
+            const widthScale = maxWidth / imgWidth;
+            const heightScale = maxHeight / imgHeight;
+            const scale = Math.min(widthScale, heightScale);
+            const scaledWidth = imgWidth * scale;
+            const scaledHeight = imgHeight * scale;
+            // center the image
+            const x = MARGIN + (maxWidth - scaledWidth) / 2;
+            const y = MARGIN + (maxHeight - scaledHeight) / 2;
+            page.drawImage(pdfImage, {
+                x,
+                y,
+                width: scaledWidth,
+                height: scaledHeight,
+            });
+        }
+        return pdfDoc;
+    }
+    async function cleanSavePdf(pdfDoc) {
+        // clear metadata fields
+        const fieldsToRemove = [
+            'Producer',
+            'Creator',
+            'CreationDate',
+            'ModDate',
+            'Author',
+            'Title',
+            'Subject',
+            'Keywords'
+        ];
+        const infoDict = pdfDoc.context.lookup(pdfDoc.getInfoDict());
+        fieldsToRemove.forEach(field => {
+            const fieldName = PDFName.of(field);
+            if (infoDict.has(fieldName)) {
+                infoDict.delete(fieldName);
+            }
+        });
+        await new Promise(resolve => setTimeout(resolve, 120));
+        const pdfBytes = await pdfDoc.save({
+            useObjectStreams: true // use object streams for better compression
+        });
+        const newPdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+        return newPdfBlob;
+    }
+</script>
+
+</html>

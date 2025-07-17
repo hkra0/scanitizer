@@ -3,6 +3,7 @@
 
 <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>🔪(๑- . -๑)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.10.111/pdf.js"></script>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
@@ -237,6 +238,7 @@
                         updatePassword(password);
                     } else {
                         processTextSet('password not provided');
+                        stopSpinner()
                     }
                 } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
                     // wrong password
@@ -245,6 +247,7 @@
                         updatePassword(password);
                     } else {
                         processTextSet('password not provided');
+                        stopSpinner()
                     }
                 }
             };

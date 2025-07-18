@@ -387,13 +387,14 @@
                 }
             }
 
-            if (nonScannedCount >= Math.min(3, numPages)) {
+            if (nonScannedCount >= Math.min(Math.max(3, Math.round(numPages / 2)), numPages)) {
                 // non-scanned PDF
+                nonScannedCount = undefined;
                 return false;
-            } else if (textedCount >= Math.min(3, numPages)) {
+            } else if (textedCount >= Math.min(Math.max(3, Math.round(numPages / 2)), numPages)) {
                 // PDF texted
                 processTextSet(`text content not reserved`, 'warn');
-                textedCount = null;
+                textedCount = undefined;
             }
         }
         return extractedImages;

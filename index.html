@@ -391,7 +391,7 @@
                 // non-scanned PDF
                 nonScannedCount = undefined;
                 return false;
-            } else if (textedCount >= Math.min(Math.max(3, Math.round(numPages / 2)), numPages)) {
+            } else if (textedCount >= Math.min(3, numPages)) {
                 // PDF texted
                 processTextSet(`text content not reserved`, 'warn');
                 textedCount = undefined;

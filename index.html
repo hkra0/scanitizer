@@ -325,50 +325,107 @@
             const renderTask = page.render(renderContext);
             // await new Promise(resolve => setTimeout(resolve, 500)); // add delay for performance
             await renderTask.promise;
-            // get operator list
+            // matrix operations
+            function multiplyMatrices(m1, m2) {
+                return [
+                    m1[0] * m2[0] + m1[2] * m2[1],
+                    m1[1] * m2[0] + m1[3] * m2[1],
+                    m1[0] * m2[2] + m1[2] * m2[3],
+                    m1[1] * m2[2] + m1[3] * m2[3],
+                    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+                    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+                ];
+            }
+            function extractPositionAndSize(matrix) {
+                // matrix: [a, b, c, d, e, f]
+                // a,d: scaleX, scaleY; e,f: x,y
+                return {
+                    x: matrix[4],
+                    y: matrix[5],
+                    scaleX: matrix[0],
+                    scaleY: matrix[3],
+                    // only main diagonal, ignore skew
+                };
+            }
+            
             const ops = await page.getOperatorList();
-            const imageNames = ops.fnArray.reduce((acc, curr, i) => {
-                if ([pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintJpegXObject].includes(curr)) {
-                    acc.push(ops.argsArray[i][0]);
+            const initialState = {
+                matrixStack: [[1, 0, 0, 1, 0, 0]],
+                currentMatrix: [1, 0, 0, 1, 0, 0],
+                images: []
+            };
+            const rawImages = ops.fnArray.reduce((state, fn, index) => {
+                const args = ops.argsArray[index];
+                const { matrixStack, currentMatrix, images } = state;
+
+                switch (fn) {
+                    case pdfjsLib.OPS.save:
+                        return {
+                            ...state,
+                            matrixStack: [...matrixStack, [...currentMatrix]] // copy current matrix
+                        };
+
+                    case pdfjsLib.OPS.restore:
+                        return {
+                            ...state,
+                            matrixStack: matrixStack.slice(0, -1), // remove last matrix
+                            currentMatrix: matrixStack[matrixStack.length - 2] || [1, 0, 0, 1, 0, 0]
+                        };
+
+                    case pdfjsLib.OPS.transform:
+                        return {
+                            ...state,
+                            currentMatrix: multiplyMatrices(currentMatrix, args)
+                        };
+
+                    case pdfjsLib.OPS.paintImageXObject:
+                    case pdfjsLib.OPS.paintJpegXObject:
+                        const imageName = args[0];
+                        const pos = extractPositionAndSize(currentMatrix);
+                        return {
+                            ...state,
+                            images: [...images, { imageName: imageName, pos: pos }]
+                        };
+
+                    default:
+                        return state;
                 }
-                return acc;
-            }, []);
+            }, initialState).images;
+
             let largestImage = null;
-            for await (const imageName of imageNames) {
-                if (!imageName.startsWith("g_")) {
-                    // object name start with "g_" is repeated image
-                    // ref: https://github.com/mozilla/pdf.js/issues/13742
-                    try {
-                        const image = await page.objs.get(imageName);
-                        const bmp = image.bitmap;
-                        const maxPixelWidth = 1931
-                        const maxPixelHeight = 2732
-                        // scale
-                        const scale = Math.min(
-                            1,
-                            maxPixelWidth / bmp.width,
-                            maxPixelHeight / bmp.height
-                        );
-                        const targetWidth = Math.round(bmp.width * scale);
-                        const targetHeight = Math.round(bmp.height * scale);
-                        const canvas = new OffscreenCanvas(targetWidth, targetHeight);
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(bmp, 0, 0, targetWidth, targetHeight);
-                        const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
-                        if ((targetWidth > 300 && targetHeight > 300)
-                            && blob.size > 10000
-                            && (!largestImage || (largestImage.width * largestImage.height < targetWidth * targetHeight))) {
-                            largestImage = {
-                                page: curPage,
-                                blob: blob,
-                                width: targetWidth,
-                                height: targetHeight,
-                                viewport: viewport
-                            };
-                        }
-                    } catch (err) {
-                        console.warn(`Image extraction failed for ${imageName}:`, err);
-                    }
+            for await (const rawImage of rawImages) {
+                const { imageName, pos } = rawImage;
+                const currentArea = pos.scaleX * pos.scaleY;
+                if (imageName.startsWith("g_")) continue;
+                if (pos.scaleX < 500 && pos.scaleY < 500) continue;
+                if (largestImage?.area > currentArea) continue;
+                try {
+                    const image = await page.objs.get(imageName);
+                    const bmp = image.bitmap;
+                    const maxPixelWidth = 1931
+                    const maxPixelHeight = 2732
+                    // scale
+                    const scale = Math.min(
+                        1,
+                        maxPixelWidth / bmp.width,
+                        maxPixelHeight / bmp.height
+                    );
+                    const targetWidth = Math.round(bmp.width * scale);
+                    const targetHeight = Math.round(bmp.height * scale);
+                    const canvas = new OffscreenCanvas(targetWidth, targetHeight);
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(bmp, 0, 0, targetWidth, targetHeight);
+                    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
+                    largestImage = {
+                        area: currentArea,
+                        page: curPage,
+                        blob: blob,
+                        width: targetWidth,
+                        height: targetHeight,
+                        viewport: viewport
+                    };
+                } catch (err) {
+                    console.warn(`Image extraction failed for ${imageName}:`, err);
                 }
             }
 

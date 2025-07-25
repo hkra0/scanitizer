@@ -144,11 +144,11 @@
     resetButton.addEventListener("click", reset);
 
     function reset() {
-        stopSpinner();
+        setIndicator('io');
         clearTimeout(processTextTimeout);
         processTextTimeout = null;
         fileInput.value = '';
-        processTextSet('select PDF file', 'io');
+        setProcess('select PDF file', 'io');
         processDiv.style.cursor = 'pointer';
         downloadLink.style.display = 'none';
         c.style.color = '#a44';
@@ -158,21 +158,24 @@
         stage = 'init';
     }
 
-    function startSpinner() {
+    function setIndicator(type) {
         const spinnerChars = ['|  ', '/  ', '-  ', '\\  '];
         let index = 0;
-        spinnerIntervalId = setInterval(() => {
-            spinner.innerText = `${spinnerChars[index]}`;
-            index = (index + 1) % spinnerChars.length;
-        }, 200);
+        if (type === 'proc') {
+            spinnerIntervalId = setInterval(() => {
+                spinner.innerText = `${spinnerChars[index]}`;
+                index = (index + 1) % spinnerChars.length;
+            }, 200);
+        } else if (type === 'warn') {
+            clearInterval(spinnerIntervalId);
+            spinner.innerText = '! ';
+        } else if (type === 'io') {
+            clearInterval(spinnerIntervalId);
+            spinner.innerText = '> ';
+        }
     }
 
-    function stopSpinner() {
-        clearInterval(spinnerIntervalId);
-        spinner.innerText = '> ';
-    }
-
-    function processTextSet(text, level) {
+    function setProcess(text, level) {
         const timeout = 2000;
         if (!processTextTimeout && (!level || level === 'proc')) {
             // proc
@@ -193,7 +196,7 @@
                 const nextText = processTextWaitlist.shift();
                 processTextTimeout = null;
                 if (nextText) {
-                    processTextSet(...nextText);
+                    setProcess(...nextText);
                 }
 
             }, timeout);
@@ -211,7 +214,7 @@
     }
 
     function main() {
-        startSpinner();
+        setIndicator('proc');
         stage = 'processing';
         c.style.color = '#a44';
         tinyko.innerText = '🔪(๑- . -๑)';
@@ -219,7 +222,7 @@
         processDiv.style.cursor = 'wait';
         downloadLink.style.display = 'none';
         if (fileInput.files.length === 0) {
-            processTextSet('No file selected');
+            setProcess('No file selected');
             return;
         }
         fileName = fileInput.files[0].name;
@@ -236,8 +239,8 @@
                     if (password) {
                         updatePassword(password);
                     } else {
-                        processTextSet('password not provided');
-                        stopSpinner();
+                        setProcess('password not provided');
+                        setIndicator('io');
                         resetButton.style.display = 'inline-block';
                     }
                 } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
@@ -246,8 +249,8 @@
                     if (password) {
                         updatePassword(password);
                     } else {
-                        processTextSet('password not provided');
-                        stopSpinner()
+                        setProcess('password not provided');
+                        setIndicator('io')
                     }
                 }
             };
@@ -255,21 +258,21 @@
             const imgs = await extractImages(pdf);
             let newPdfBlob;
             if (imgs === false) {
-                processTextSet('Non-scanned PDF, only metadata removed.', 'warn');
+                setProcess('Non-scanned PDF, only metadata removed.', 'warn');
                 const originalPdfDoc = await PDFDocument.load(buffer);
                 newPdfBlob = await cleanSavePdf(originalPdfDoc);
             } else if (imgs.length === 0) {
-                processTextSet('No images extracted');
+                setProcess('No images extracted');
                 return;
             } else {
-                processTextSet('saving...');
+                setProcess('saving...');
                 const newPdf = await createNewPdf(imgs);
                 newPdfBlob = await cleanSavePdf(newPdf);
             }
             processDiv.style.cursor = 'pointer';
             resetButton.style.display = 'inline-block';
             stage = 'done';
-            stopSpinner();
+            setIndicator('io');
             // create a URL for the new PDF blob
             if (newPdfBlob instanceof Blob) {
                 const url = URL.createObjectURL(newPdfBlob);
@@ -278,13 +281,13 @@
                 const baseName = fileName.replace(/\.pdf$/i, '');
                 downloadLink.download = `${baseName}_c.pdf`;
                 c.style.color = '#c3c3c3';
-                processTextSet('download cleaned PDF', 'io');
+                setProcess('download cleaned PDF', 'io');
                 setTimeout(() => {
                     tinyko.innerText = '🔪(๑• . •๑)';
                     document.title = '🔪(๑• . •๑)';
                 }, 300);
             } else {
-                processTextSet('PDF creation failed', 'warn');
+                setProcess('PDF creation failed', 'warn');
             }
             pdf.destroy();
         };
@@ -305,7 +308,7 @@
         let textedCount = 0; // texted PDF count
         let nonScannedCount = 0; // non-scanned PDF count
         for (let curPage = 1; curPage <= numPages; curPage++) {
-            processTextSet(`extracting ${curPage} / ${numPages}`);
+            setProcess(`extracting ${curPage} / ${numPages}`);
             const page = await pdf.getPage(curPage);
             const scale = 1.5;
             const viewport = page.getViewport({ scale });
@@ -347,7 +350,7 @@
                     // only main diagonal, ignore skew
                 };
             }
-            
+
             const ops = await page.getOperatorList();
             const initialState = {
                 matrixStack: [[1, 0, 0, 1, 0, 0]],
@@ -450,7 +453,7 @@
                 return false;
             } else if (textedCount >= Math.min(3, numPages)) {
                 // PDF texted
-                processTextSet(`text content not reserved`, 'warn');
+                setProcess(`text content not reserved`, 'warn');
                 textedCount = undefined;
             }
         }
@@ -459,7 +462,7 @@
 
     async function createNewPdf(extractedImages) {
         if (extractedImages.length === 0) {
-            processTextSet('No images extracted');
+            setProcess('No images extracted');
             return;
         }
         const pdfDoc = await PDFDocument.create();
@@ -470,7 +473,7 @@
         const LANDSCAPE_HEIGHT = PORTRAIT_WIDTH;
         extractedImages.sort((a, b) => a.page - b.page);
         for (const img of extractedImages) {
-            processTextSet(`processing ${img.page} / ${extractedImages.length}`);
+            setProcess(`processing ${img.page} / ${extractedImages.length}`);
             const arrayBuffer = await img.blob.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
             let pdfImage;

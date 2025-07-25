@@ -168,9 +168,11 @@
             }, 200);
         } else if (type === 'warn') {
             clearInterval(spinnerIntervalId);
+            spinner.style.color = '#a44';
             spinner.innerText = '! ';
         } else if (type === 'io') {
             clearInterval(spinnerIntervalId);
+            spinner.style.color = '';
             spinner.innerText = '> ';
         }
     }
@@ -189,6 +191,8 @@
         }
         if (!processTextTimeout && level === 'warn') {
             // warn (start timeout)
+            setIndicator('warn');
+            processText.innerText = '';
             processText.style.textDecoration = 'none';
             processText.style.color = '#a44';
             processText.innerText = text;
@@ -197,8 +201,12 @@
                 processTextTimeout = null;
                 if (nextText) {
                     setProcess(...nextText);
+                } else {
+                    setIndicator('proc');
+                    processText.style.color = '';
+                    spinner.style.color = '';
+                    processText.innerText = '';
                 }
-
             }, timeout);
         }
         if (level === 'io') {
@@ -206,9 +214,12 @@
             if (processTextTimeout) {
                 processTextWaitlist.push([text, 'io']);
             } else {
+                setIndicator('io');
                 processText.style.textDecoration = 'underline';
                 processText.style.color = '';
                 processText.innerText = text;
+                processDiv.style.cursor = 'pointer';
+                resetButton.style.display = 'inline-block';
             }
         }
     }
@@ -231,7 +242,11 @@
         fileReader.onload = async function () {
             const buffer = this.result;
             const safeBuffer = buffer.slice(0);
-            const loadingTask = pdfjsLib.getDocument(safeBuffer);
+            const loadingTask = pdfjsLib.getDocument({
+                data: safeBuffer,
+                disableFontFace: true,
+                verbosity: 0,
+            });
             loadingTask.onPassword = function (updatePassword, reason) {
                 if (reason === pdfjsLib.PasswordResponses.NEED_PASSWORD) {
                     // require password
@@ -239,9 +254,7 @@
                     if (password) {
                         updatePassword(password);
                     } else {
-                        setProcess('password not provided');
-                        setIndicator('io');
-                        resetButton.style.display = 'inline-block';
+                        setProcess('password not provided', 'io');
                     }
                 } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
                     // wrong password
@@ -249,8 +262,7 @@
                     if (password) {
                         updatePassword(password);
                     } else {
-                        setProcess('password not provided');
-                        setIndicator('io')
+                        setProcess('password not provided', 'io');
                     }
                 }
             };
@@ -262,17 +274,13 @@
                 const originalPdfDoc = await PDFDocument.load(buffer);
                 newPdfBlob = await cleanSavePdf(originalPdfDoc);
             } else if (imgs.length === 0) {
-                setProcess('No images extracted');
+                setProcess('No images extracted', 'io');
                 return;
             } else {
                 setProcess('saving...');
                 const newPdf = await createNewPdf(imgs);
                 newPdfBlob = await cleanSavePdf(newPdf);
             }
-            processDiv.style.cursor = 'pointer';
-            resetButton.style.display = 'inline-block';
-            stage = 'done';
-            setIndicator('io');
             // create a URL for the new PDF blob
             if (newPdfBlob instanceof Blob) {
                 const url = URL.createObjectURL(newPdfBlob);
@@ -282,6 +290,7 @@
                 downloadLink.download = `${baseName}_c.pdf`;
                 c.style.color = '#c3c3c3';
                 setProcess('download cleaned PDF', 'io');
+                stage = 'done';
                 setTimeout(() => {
                     tinyko.innerText = '🔪(๑• . •๑)';
                     document.title = '🔪(๑• . •๑)';
@@ -461,10 +470,7 @@
     }
 
     async function createNewPdf(extractedImages) {
-        if (extractedImages.length === 0) {
-            setProcess('No images extracted');
-            return;
-        }
+        if (extractedImages.length === 0) return;
         const pdfDoc = await PDFDocument.create();
         // standard A4 dimensions (points)
         const PORTRAIT_WIDTH = 595;

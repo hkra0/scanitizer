@@ -456,11 +456,11 @@
                 }
             }
 
-            if (nonScannedCount >= Math.min(Math.max(3, Math.round(numPages / 2)), numPages)) {
+            if (nonScannedCount >= Math.min(Math.max(3, Math.round(numPages / 3)), numPages)) {
                 // non-scanned PDF
                 nonScannedCount = undefined;
                 return false;
-            } else if (textedCount >= Math.min(3, numPages)) {
+            } else if ((textedCount >= Math.min(3, numPages)) && nonScannedCount < 3) {
                 // PDF texted
                 setProcess(`text content not reserved`, 'warn');
                 textedCount = undefined;

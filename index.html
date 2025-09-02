@@ -1,33 +1,121 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8" />
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>🔪(๑- . -๑)</title>
+    <title>✂️(๑- . -๑)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.10.111/pdf.js"></script>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.10.111/build/pdf.worker.js';
     </script>
+    <script>
+        let tool = '✂️';
+        // set theme specific emoji
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            tool = '🔪';
+        }
+        const langPack = {
+            en: {
+                selectFile: "select PDF file",
+                noFile: "No file selected",
+                passwordPrompt: "PDF password",
+                incorrectPassword: "incorrect password",
+                passwordNotProvided: "password not provided",
+                extracting: "extracting",
+                processing: "processing",
+                notScanned: "Non-scanned PDF, only metadata removed.",
+                noImages: "No images extracted",
+                saving: "saving...",
+                download: "download cleaned PDF",
+                failed: "PDF creation failed",
+                notReserved: "text content not reserved",
+                footer: "For scanned PDF cleanup.",
+            },
+            zh: {
+                selectFile: "选择 PDF 文件",
+                noFile: "未选择文件",
+                passwordPrompt: "请输入 PDF 密码",
+                incorrectPassword: "密码错误，请重新输入",
+                passwordNotProvided: "未提供密码",
+                extracting: "提取",
+                processing: "处理",
+                notScanned: "非扫描 PDF，仅移除元数据",
+                noImages: "未提取到图像",
+                saving: "正在保存...",
+                download: "下载处理后 PDF",
+                failed: "PDF 创建失败",
+                notReserved: "文本内容未保留",
+                footer: "用于清理扫描件 PDF",
+            }
+        };
+
+        let lang = (navigator.languages && navigator.languages[0]) || navigator.language || 'en';
+        lang = lang.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+        const t = langPack[lang];
+    </script>
+
     <style>
-        * {
-            color-scheme: dark;
+        :root {
+            --bg-primary: #f8f8f8;
+            --bg-secondary: #ffffff;
+            --text-primary: #333333;
+            --text-secondary: #666666;
+            --accent-color: #2a6fb7;
+            --border-color: #e0e0e0;
+            --shadow-color: rgba(0, 0, 0, 0.1);
+            --process-bg: #f0f0f0;
+            --process-border: #2a6fb7;
+            --footer-color: #777777;
+            --hover-bg: #e8e8e8;
+            --warning-color: #d35400;
         }
 
-        :root {
-            background-color: #080808;
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-primary: #080808;
+                --bg-secondary: #181818;
+                --text-primary: #e0e0e0;
+                --text-secondary: #a0a0a0;
+                --accent-color: #a44;
+                --border-color: #333333;
+                --shadow-color: rgba(0, 0, 0, 0.5);
+                --process-bg: #242424;
+                --process-border: #a44;
+                --footer-color: #aaaaaa;
+                --hover-bg: #2a2a2a;
+                --warning-color: #ff8c00;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
         }
 
         body {
-            font-family: 'consolas', monospace;
-            background: #181818;
-            color: #c3c3c3;
+            font-family: 'Consolas', 'Courier New', monospace;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            margin: 0;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: var(--bg-secondary);
             max-width: 480px;
-            margin: 4rem auto;
+            width: 100%;
+            margin: 2rem auto;
             padding: 2rem;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 0 10px var(--shadow-color);
             border-radius: 8px;
+            border: 1px solid var(--border-color);
         }
 
         h1 {
@@ -37,7 +125,7 @@
         }
 
         #c {
-            color: #a44;
+            color: var(--accent-color);
             transition: all .5s ease-in-out;
         }
 
@@ -51,15 +139,16 @@
         #processDiv {
             margin: 1.5rem 0;
             padding: 0.75rem;
-            background: #242424;
-            border-left: 4px solid #a44;
+            background: var(--process-bg);
+            border-left: 4px solid var(--process-border);
             font-size: 0.95rem;
             border-radius: 4px;
             cursor: pointer;
+            position: relative;
         }
 
         #processDiv:hover {
-            background: #2a2a2a;
+            background: var(--hover-bg);
         }
 
         #processText {
@@ -76,49 +165,69 @@
         }
 
         #reset:hover {
-            color: #a44;
+            color: var(--accent-color);
         }
 
         footer {
             margin-top: 3rem;
             font-size: 0.8rem;
-            color: #aaa;
+            color: var(--footer-color);
             text-align: center;
         }
 
         a {
-            color: #aaa;
+            color: var(--footer-color);
             transition: all 0.2s ease-in-out;
         }
 
         a:hover {
-            color: #a44;
+            color: var(--accent-color);
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 1.5rem;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            #tinyko {
+                font-size: 1.5rem;
+            }
         }
     </style>
 </head>
 
 <body>
-    <h1>s<span id="c">c</span>anitizer</h1>
-    <div id="tinyko">🔪(๑- . -๑)</div>
-    <input type="file" id="fileInput" accept=".pdf" style="display: none;" />
-    <div style="position: relative;">
-        <div id="processDiv">
-            <span id="spinner">> </span><span id="processText">select PDF file</span>
+    <div class="container">
+        <h1>s<span id="c">c</span>anitizer</h1>
+        <div id="tinyko">(๑- . -๑)</div>
+        <input type="file" id="fileInput" accept=".pdf" style="display: none;" />
+        <div style="position: relative;">
+            <div id="processDiv">
+                <span id="spinner">> </span><span id="processText">select PDF file</span>
+            </div>
+            <span id="reset" style="display: none;">
+                <svg style="width: 1.2em; height: 1.2em;" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </span>
         </div>
-        <span id="reset" style="display: none;">
-            <svg style="width: 1.2em; height: 1.2em;" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
-                </path>
-            </svg>
-        </span>
-    </div>
-    <a href="#" id="downloadLink" style="display: none;">download cleaned PDF</a>
+        <a href="#" id="downloadLink"
+            style="display: none; margin-top: 1rem; padding: 0.5rem 1rem; background-color: var(--accent-color); color: white; border-radius: 4px; text-decoration: none;">download
+            cleaned PDF</a>
 
-    <footer>
-        For scanned PDF cleanup.
-        <a href="https://github.com/AFXR17light/scanitizer" target="_blank">Github</a>
-    </footer>
+        <footer>
+            <span id="footer">
+                For scanned PDF cleanup.
+            </span>
+            <a href="https://github.com/AFXR17light/scanitizer" target="_blank">Github</a>
+        </footer>
+    </div>
 </body>
 
 <script>
@@ -148,12 +257,12 @@
         clearTimeout(processTextTimeout);
         processTextTimeout = null;
         fileInput.value = '';
-        setProcess('select PDF file', 'io');
+        setProcess(t.selectFile, 'io');
         processDiv.style.cursor = 'pointer';
         downloadLink.style.display = 'none';
-        c.style.color = '#a44';
-        tinyko.innerText = '🔪(๑- . -๑)';
-        document.title = '🔪(๑- . -๑)';
+        c.style.color = 'var(--accent-color)';
+        tinyko.innerText = tool + '(๑- . -๑)';
+        document.title = tool + '(๑- . -๑)';
         resetButton.style.display = 'none';
         stage = 'init';
     }
@@ -168,7 +277,7 @@
             }, 200);
         } else if (type === 'warn') {
             clearInterval(spinnerIntervalId);
-            spinner.style.color = '#a44';
+            spinner.style.color = 'var(--warning-color)';
             spinner.innerText = '! ';
         } else if (type === 'io') {
             clearInterval(spinnerIntervalId);
@@ -194,7 +303,7 @@
             setIndicator('warn');
             processText.innerText = '';
             processText.style.textDecoration = 'none';
-            processText.style.color = '#a44';
+            processText.style.color = 'var(--warning-color)';
             processText.innerText = text;
             processTextTimeout = setTimeout(() => {
                 const nextText = processTextWaitlist.shift();
@@ -227,13 +336,13 @@
     function main() {
         setIndicator('proc');
         stage = 'processing';
-        c.style.color = '#a44';
-        tinyko.innerText = '🔪(๑- . -๑)';
-        document.title = '🔪(๑- . -๑)';
+        c.style.color = 'var(--accent-color)';
+        tinyko.innerText = tool + '(๑- . -๑)';
+        document.title = tool + '(๑- . -๑)';
         processDiv.style.cursor = 'wait';
         downloadLink.style.display = 'none';
         if (fileInput.files.length === 0) {
-            setProcess('No file selected');
+            setProcess(t.noFile);
             return;
         }
         fileName = fileInput.files[0].name;
@@ -250,19 +359,19 @@
             loadingTask.onPassword = function (updatePassword, reason) {
                 if (reason === pdfjsLib.PasswordResponses.NEED_PASSWORD) {
                     // require password
-                    const password = prompt('PDF password');
+                    const password = prompt(t.passwordPrompt);
                     if (password) {
                         updatePassword(password);
                     } else {
-                        setProcess('password not provided', 'io');
+                        setProcess(t.passwordNotProvided, 'io');
                     }
                 } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
                     // wrong password
-                    const password = prompt('incorrect password');
+                    const password = prompt(t.incorrectPassword);
                     if (password) {
                         updatePassword(password);
                     } else {
-                        setProcess('password not provided', 'io');
+                        setProcess(t.passwordNotProvided, 'io');
                     }
                 }
             };
@@ -270,14 +379,14 @@
             const imgs = await extractImages(pdf);
             let newPdfBlob;
             if (imgs === false) {
-                setProcess('Non-scanned PDF, only metadata removed.', 'warn');
+                setProcess(t.notScanned, 'warn');
                 const originalPdfDoc = await PDFDocument.load(buffer);
                 newPdfBlob = await cleanSavePdf(originalPdfDoc);
             } else if (imgs.length === 0) {
-                setProcess('No images extracted', 'io');
+                setProcess(t.noImages, 'io');
                 return;
             } else {
-                setProcess('saving...');
+                setProcess(t.saving);
                 const newPdf = await createNewPdf(imgs);
                 newPdfBlob = await cleanSavePdf(newPdf);
             }
@@ -288,15 +397,15 @@
                 downloadLink.href = url;
                 const baseName = fileName.replace(/\.pdf$/i, '');
                 downloadLink.download = `${baseName}_c.pdf`;
-                c.style.color = '#c3c3c3';
-                setProcess('download cleaned PDF', 'io');
+                c.style.color = 'var(--text-primary)';
+                setProcess(t.download, 'io');
                 stage = 'done';
                 setTimeout(() => {
-                    tinyko.innerText = '🔪(๑• . •๑)';
-                    document.title = '🔪(๑• . •๑)';
+                    tinyko.innerText = tool + '(๑• . •๑)';
+                    document.title = tool + '(๑• . •๑)';
                 }, 300);
             } else {
-                setProcess('PDF creation failed', 'warn');
+                setProcess(t.failed, 'warn');
             }
             pdf.destroy();
         };
@@ -317,7 +426,7 @@
         let textedCount = 0; // texted PDF count
         let nonScannedCount = 0; // non-scanned PDF count
         for (let curPage = 1; curPage <= numPages; curPage++) {
-            setProcess(`extracting ${curPage} / ${numPages}`);
+            setProcess(`${t.extracting} ${curPage} / ${numPages}`);
             const page = await pdf.getPage(curPage);
             const scale = 1.5;
             const viewport = page.getViewport({ scale });
@@ -462,7 +571,7 @@
                 return false;
             } else if ((textedCount >= Math.min(3, numPages)) && nonScannedCount < 3) {
                 // PDF texted
-                setProcess(`text content not reserved`, 'warn');
+                setProcess(t.notReserved, 'warn');
                 textedCount = undefined;
             }
         }
@@ -479,7 +588,7 @@
         const LANDSCAPE_HEIGHT = PORTRAIT_WIDTH;
         extractedImages.sort((a, b) => a.page - b.page);
         for (const img of extractedImages) {
-            setProcess(`processing ${img.page} / ${extractedImages.length}`);
+            setProcess(`${t.processing} ${img.page} / ${extractedImages.length}`);
             const arrayBuffer = await img.blob.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
             let pdfImage;
@@ -543,6 +652,32 @@
         const newPdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
         return newPdfBlob;
     }
+    // set initial process text
+    processText.innerText = t.selectFile;
+    downloadLink.innerText = t.download;
+    document.getElementById("footer").innerText = t.footer;
+    // set tool emoji
+    document.getElementById("tinyko").innerText = tool + '(๑- . -๑)';
+    document.title = tool + '(๑- . -๑)';
+    // handle dark mode change
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+        if (e.matches) {
+            tool = '🔪';
+        } else {
+            tool = '✂️';
+        }
+        if (stage === 'init') {
+            tinyko.innerText = tool + '(๑- . -๑)';
+            document.title = tool + '(๑- . -๑)';
+        } else if (stage === 'processing') {
+            tinyko.innerText = tool + '(๑- . -๑)';
+            document.title = tool + '(๑- . -๑)';
+        } else if (stage === 'done') {
+            tinyko.innerText = tool + '(๑• . •๑)';
+            document.title = tool + '(๑• . •๑)';
+        }
+    });
+
 </script>
 
 </html>

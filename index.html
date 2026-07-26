@@ -18,7 +18,7 @@
         }
         const langPack = {
             en: {
-                selectFile: "select PDF file",
+                selectFile: "select PDF or images",
                 noFile: "No file selected",
                 passwordPrompt: "PDF password",
                 incorrectPassword: "incorrect password",
@@ -31,10 +31,10 @@
                 download: "download cleaned PDF",
                 failed: "PDF creation failed",
                 notReserved: "text content not reserved",
-                footer: "For scanned PDF cleanup.",
+                footer: "For scanned PDF cleanup or image to PDF.",
             },
             zh: {
-                selectFile: "选择 PDF 文件",
+                selectFile: "选择 PDF 或图片",
                 noFile: "未选择文件",
                 passwordPrompt: "请输入 PDF 密码",
                 incorrectPassword: "密码错误，请重新输入",
@@ -47,7 +47,7 @@
                 download: "下载处理后 PDF",
                 failed: "PDF 创建失败",
                 notReserved: "文本内容未保留",
-                footer: "用于清理扫描件 PDF",
+                footer: "用于清理扫描件 PDF 或图片转 PDF",
             }
         };
 
@@ -204,10 +204,10 @@
     <div class="container">
         <h1>s<span id="c">c</span>anitizer</h1>
         <div id="tinyko">(๑- . -๑)</div>
-        <input type="file" id="fileInput" accept=".pdf" style="display: none;" />
+        <input type="file" id="fileInput" accept=".pdf,image/*,.jpg,.jpeg,.png,.webp,.bmp" multiple style="display: none;" />
         <div style="position: relative;">
             <div id="processDiv">
-                <span id="spinner">> </span><span id="processText">select PDF file</span>
+                <span id="spinner">> </span><span id="processText">select PDF or images</span>
             </div>
             <span id="reset" style="display: none;">
                 <svg style="width: 1.2em; height: 1.2em;" fill="none" stroke="currentColor" viewBox="0 0 24 24"
@@ -223,7 +223,7 @@
 
         <footer>
             <span id="footer">
-                For scanned PDF cleanup.
+                For scanned PDF cleanup or image to PDF.
             </span>
             <a href="https://github.com/AFXR17light/scanitizer" target="_blank">Github</a>
         </footer>
@@ -345,71 +345,123 @@
             setProcess(t.noFile);
             return;
         }
-        fileName = fileInput.files[0].name;
-        const file = fileInput.files[0];
-        const fileReader = new FileReader();
-        fileReader.onload = async function () {
-            const buffer = this.result;
-            const safeBuffer = buffer.slice(0);
-            const loadingTask = pdfjsLib.getDocument({
-                data: safeBuffer,
-                disableFontFace: true,
-                verbosity: 0,
-            });
-            loadingTask.onPassword = function (updatePassword, reason) {
-                if (reason === pdfjsLib.PasswordResponses.NEED_PASSWORD) {
-                    // require password
-                    const password = prompt(t.passwordPrompt);
-                    if (password) {
-                        updatePassword(password);
-                    } else {
-                        setProcess(t.passwordNotProvided, 'io');
+        const files = Array.from(fileInput.files);
+        fileName = files[0].name;
+        const isPdf = fileName.toLowerCase().endsWith('.pdf') || (files[0].type && files[0].type === 'application/pdf');
+        if (isPdf) {
+            const file = files[0];
+            const fileReader = new FileReader();
+            fileReader.onload = async function () {
+                const buffer = this.result;
+                const safeBuffer = buffer.slice(0);
+                const loadingTask = pdfjsLib.getDocument({
+                    data: safeBuffer,
+                    disableFontFace: true,
+                    verbosity: 0,
+                });
+                loadingTask.onPassword = function (updatePassword, reason) {
+                    if (reason === pdfjsLib.PasswordResponses.NEED_PASSWORD) {
+                        // require password
+                        const password = prompt(t.passwordPrompt);
+                        if (password) {
+                            updatePassword(password);
+                        } else {
+                            setProcess(t.passwordNotProvided, 'io');
+                        }
+                    } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
+                        // wrong password
+                        const password = prompt(t.incorrectPassword);
+                        if (password) {
+                            updatePassword(password);
+                        } else {
+                            setProcess(t.passwordNotProvided, 'io');
+                        }
                     }
-                } else if (reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD) {
-                    // wrong password
-                    const password = prompt(t.incorrectPassword);
-                    if (password) {
-                        updatePassword(password);
-                    } else {
-                        setProcess(t.passwordNotProvided, 'io');
-                    }
+                };
+                const pdf = await loadingTask.promise;
+                const imgs = await extractImages(pdf);
+                let newPdfBlob;
+                if (imgs === false) {
+                    setProcess(t.notScanned, 'warn');
+                    const originalPdfDoc = await PDFDocument.load(buffer);
+                    newPdfBlob = await cleanSavePdf(originalPdfDoc);
+                } else if (imgs.length === 0) {
+                    setProcess(t.noImages, 'io');
+                    return;
+                } else {
+                    setProcess(t.saving);
+                    const newPdf = await createNewPdf(imgs);
+                    newPdfBlob = await cleanSavePdf(newPdf);
                 }
+                finishProcessing(newPdfBlob);
+                pdf.destroy();
             };
-            const pdf = await loadingTask.promise;
-            const imgs = await extractImages(pdf);
-            let newPdfBlob;
-            if (imgs === false) {
-                setProcess(t.notScanned, 'warn');
-                const originalPdfDoc = await PDFDocument.load(buffer);
-                newPdfBlob = await cleanSavePdf(originalPdfDoc);
-            } else if (imgs.length === 0) {
-                setProcess(t.noImages, 'io');
-                return;
-            } else {
-                setProcess(t.saving);
-                const newPdf = await createNewPdf(imgs);
-                newPdfBlob = await cleanSavePdf(newPdf);
+            fileReader.readAsArrayBuffer(file);
+        } else {
+            handleImageFiles(files);
+        }
+    }
+
+    function finishProcessing(newPdfBlob) {
+        if (newPdfBlob instanceof Blob) {
+            const url = URL.createObjectURL(newPdfBlob);
+            downloadLink.href = url;
+            const baseName = fileName.replace(/\.[^/.]+$/, '');
+            downloadLink.download = `${baseName}_c.pdf`;
+            c.style.color = 'var(--text-primary)';
+            setProcess(t.download, 'io');
+            stage = 'done';
+            setTimeout(() => {
+                tinyko.innerText = tool + '(๑• . •๑)';
+                document.title = tool + '(๑• . •๑)';
+            }, 300);
+        } else {
+            setProcess(t.failed, 'warn');
+        }
+    }
+
+    async function handleImageFiles(files) {
+        const extractedImages = [];
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            setProcess(`${t.extracting} ${i + 1} / ${files.length}`);
+            try {
+                const bmp = await createImageBitmap(file);
+                const isLandscape = bmp.width > bmp.height;
+                const maxPixelWidth = isLandscape ? 2732 : 1931;
+                const maxPixelHeight = isLandscape ? 1931 : 2732;
+                const scale = Math.min(
+                    1,
+                    maxPixelWidth / bmp.width,
+                    maxPixelHeight / bmp.height
+                );
+                const targetWidth = Math.round(bmp.width * scale);
+                const targetHeight = Math.round(bmp.height * scale);
+                const canvas = new OffscreenCanvas(targetWidth, targetHeight);
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(bmp, 0, 0, targetWidth, targetHeight);
+                if (typeof bmp.close === 'function') {
+                    bmp.close();
+                }
+                const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
+                extractedImages.push({
+                    page: i + 1,
+                    blob: blob,
+                    width: targetWidth,
+                    height: targetHeight
+                });
+            } catch (err) {
+                console.warn(`Image processing failed for ${file.name}:`, err);
             }
-            // create a URL for the new PDF blob
-            if (newPdfBlob instanceof Blob) {
-                const url = URL.createObjectURL(newPdfBlob);
-                // set the download link
-                downloadLink.href = url;
-                const baseName = fileName.replace(/\.pdf$/i, '');
-                downloadLink.download = `${baseName}_c.pdf`;
-                c.style.color = 'var(--text-primary)';
-                setProcess(t.download, 'io');
-                stage = 'done';
-                setTimeout(() => {
-                    tinyko.innerText = tool + '(๑• . •๑)';
-                    document.title = tool + '(๑• . •๑)';
-                }, 300);
-            } else {
-                setProcess(t.failed, 'warn');
-            }
-            pdf.destroy();
-        };
-        fileReader.readAsArrayBuffer(file);
+        }
+        if (extractedImages.length === 0) {
+            setProcess(t.noImages, 'io');
+            return;
+        }
+        setProcess(t.saving);
+        const newPdf = await createNewPdf(extractedImages);
+        const newPdfBlob = await cleanSavePdf(newPdf);
+        finishProcessing(newPdfBlob);
     }
 
     function handleProcessClick() {

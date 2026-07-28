@@ -7,6 +7,7 @@
     <title>✂️(๑- . -๑)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.10.111/pdf.js"></script>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.10.111/build/pdf.worker.js';
     </script>
@@ -32,6 +33,12 @@
                 failed: "PDF creation failed",
                 notReserved: "text content not reserved",
                 footer: "For scanned PDF cleanup or image to PDF.",
+                formatHeader: "output format:",
+                formatPdf: "pdf",
+                formatImages: "images",
+                formatZip: "images (zip)",
+                downloading: "downloading...",
+                zipping: "zipping...",
             },
             zh: {
                 selectFile: "选择 PDF 或图片",
@@ -48,6 +55,12 @@
                 failed: "PDF 创建失败",
                 notReserved: "文本内容未保留",
                 footer: "用于清理扫描件 PDF 或图片转 PDF",
+                formatHeader: "输出格式:",
+                formatPdf: "pdf",
+                formatImages: "逐张图片",
+                formatZip: "图片 (zip)",
+                downloading: "下载中...",
+                zipping: "打包中...",
             }
         };
 
@@ -184,6 +197,43 @@
             color: var(--accent-color);
         }
 
+        #formatMenu {
+            display: none;
+            margin: 0.5rem 0 0 0;
+            padding: 0;
+            list-style: none;
+            font-size: 0.95rem;
+        }
+
+        #formatMenu .fmt-header {
+            padding: 0.4rem 0.75rem;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+
+        #formatMenu .fmt-option {
+            padding: 0.3rem 0.75rem;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: background-color 0.15s, color 0.15s;
+            user-select: none;
+        }
+
+        #formatMenu .fmt-option:hover {
+            background: var(--hover-bg);
+            color: var(--accent-color);
+        }
+
+        #formatMenu .fmt-option .fmt-cursor {
+            color: var(--accent-color);
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+
+        #formatMenu .fmt-option:hover .fmt-cursor {
+            opacity: 1;
+        }
+
         @media (max-width: 480px) {
             .container {
                 padding: 1.5rem;
@@ -217,6 +267,12 @@
                 </svg>
             </span>
         </div>
+        <ul id="formatMenu">
+            <li class="fmt-header">> <span id="fmtHeaderText">output format:</span></li>
+            <li class="fmt-option" data-format="pdf"><span class="fmt-cursor">> </span>[1] <span class="fmt-label">pdf</span></li>
+            <li class="fmt-option" data-format="images"><span class="fmt-cursor">> </span>[2] <span class="fmt-label">images</span></li>
+            <li class="fmt-option" data-format="zip"><span class="fmt-cursor">> </span>[3] <span class="fmt-label">images (zip)</span></li>
+        </ul>
         <a href="#" id="downloadLink"
             style="display: none; margin-top: 1rem; padding: 0.5rem 1rem; background-color: var(--accent-color); color: white; border-radius: 4px; text-decoration: none;">download
             cleaned PDF</a>
@@ -247,10 +303,29 @@
     let spinnerIntervalId = null;
     let processTextTimeout = null;
     let processTextWaitlist = [];
+    let cachedPdfBlob = null;
+    let cachedImages = null;
+
+    const formatMenu = document.getElementById('formatMenu');
 
     fileInput.addEventListener("change", main);
     processDiv.addEventListener("click", handleProcessClick);
     resetButton.addEventListener("click", reset);
+
+    // format menu click handlers
+    formatMenu.querySelectorAll('.fmt-option').forEach(opt => {
+        opt.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const format = opt.dataset.format;
+            if (format === 'pdf') {
+                downloadLink.click();
+            } else if (format === 'images') {
+                downloadAsImages();
+            } else if (format === 'zip') {
+                downloadAsZip();
+            }
+        });
+    });
 
     function reset() {
         setIndicator('io');
@@ -260,6 +335,9 @@
         setProcess(t.selectFile, 'io');
         processDiv.style.cursor = 'pointer';
         downloadLink.style.display = 'none';
+        formatMenu.style.display = 'none';
+        cachedPdfBlob = null;
+        cachedImages = null;
         c.style.color = 'var(--accent-color)';
         tinyko.innerText = tool + '(๑- . -๑)';
         document.title = tool + '(๑- . -๑)';
@@ -385,6 +463,7 @@
                     setProcess(t.notScanned, 'warn');
                     const originalPdfDoc = await PDFDocument.load(buffer);
                     newPdfBlob = await cleanSavePdf(originalPdfDoc);
+                    finishProcessing(newPdfBlob, null, true);
                 } else if (imgs.length === 0) {
                     setProcess(t.noImages, 'io');
                     return;
@@ -392,8 +471,8 @@
                     setProcess(t.saving);
                     const newPdf = await createNewPdf(imgs);
                     newPdfBlob = await cleanSavePdf(newPdf);
+                    finishProcessing(newPdfBlob, imgs, false);
                 }
-                finishProcessing(newPdfBlob);
                 pdf.destroy();
             };
             fileReader.readAsArrayBuffer(file);
@@ -402,22 +481,74 @@
         }
     }
 
-    function finishProcessing(newPdfBlob) {
+    function finishProcessing(newPdfBlob, extractedImages, directDownload) {
         if (newPdfBlob instanceof Blob) {
             const url = URL.createObjectURL(newPdfBlob);
             downloadLink.href = url;
             const baseName = fileName.replace(/\.[^/.]+$/, '');
             downloadLink.download = `${baseName}_c.pdf`;
             c.style.color = 'var(--text-primary)';
-            setProcess(t.download, 'io');
             stage = 'done';
             setTimeout(() => {
                 tinyko.innerText = tool + '(๑• . •๑)';
                 document.title = tool + '(๑• . •๑)';
             }, 300);
+
+            if (directDownload || !extractedImages || extractedImages.length === 0) {
+                // non-scanned PDF: no images, direct PDF download
+                setProcess(t.download, 'io');
+            } else {
+                // show format menu
+                cachedPdfBlob = newPdfBlob;
+                cachedImages = extractedImages;
+                setProcess(t.download, 'io');
+                formatMenu.style.display = 'block';
+                resetButton.style.display = 'inline-block';
+            }
         } else {
             setProcess(t.failed, 'warn');
         }
+    }
+
+    async function downloadAsImages() {
+        if (!cachedImages || cachedImages.length === 0) return;
+        setIndicator('proc');
+        const baseName = fileName.replace(/\.[^/.]+$/, '');
+        for (let i = 0; i < cachedImages.length; i++) {
+            setProcess(`${t.downloading} ${i + 1} / ${cachedImages.length}`);
+            const img = cachedImages[i];
+            const url = URL.createObjectURL(img.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${baseName}_${String(i + 1).padStart(3, '0')}.jpg`;
+            a.click();
+            URL.revokeObjectURL(url);
+            // small delay between downloads to avoid browser throttling
+            await new Promise(r => setTimeout(r, 200));
+        }
+        setIndicator('io');
+        setProcess(t.download, 'io');
+    }
+
+    async function downloadAsZip() {
+        if (!cachedImages || cachedImages.length === 0) return;
+        setIndicator('proc');
+        setProcess(t.zipping);
+        const zip = new JSZip();
+        const baseName = fileName.replace(/\.[^/.]+$/, '');
+        for (let i = 0; i < cachedImages.length; i++) {
+            const img = cachedImages[i];
+            zip.file(`${baseName}_${String(i + 1).padStart(3, '0')}.jpg`, img.blob);
+        }
+        const zipBlob = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${baseName}_images.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+        setIndicator('io');
+        setProcess(t.download, 'io');
     }
 
     async function handleImageFiles(files) {
@@ -461,7 +592,7 @@
         setProcess(t.saving);
         const newPdf = await createNewPdf(extractedImages);
         const newPdfBlob = await cleanSavePdf(newPdf);
-        finishProcessing(newPdfBlob);
+        finishProcessing(newPdfBlob, extractedImages, false);
     }
 
     function handleProcessClick() {
@@ -708,6 +839,14 @@
     processText.innerText = t.selectFile;
     downloadLink.innerText = t.download;
     document.getElementById("footer").innerText = t.footer;
+    // set format menu labels
+    document.getElementById('fmtHeaderText').innerText = t.formatHeader;
+    formatMenu.querySelectorAll('.fmt-option').forEach(opt => {
+        const label = opt.querySelector('.fmt-label');
+        if (opt.dataset.format === 'pdf') label.innerText = t.formatPdf;
+        else if (opt.dataset.format === 'images') label.innerText = t.formatImages;
+        else if (opt.dataset.format === 'zip') label.innerText = t.formatZip;
+    });
     // set tool emoji
     document.getElementById("tinyko").innerText = tool + '(๑- . -๑)';
     document.title = tool + '(๑- . -๑)';

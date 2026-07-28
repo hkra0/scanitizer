@@ -1,0 +1,48 @@
+/* Design tokens, reset and page layout */
+
+:root {
+    --bg: #eeeeec;
+    --term-bg: #fbfbfa;
+    --border: #d2d2cc;
+    --text: #333333;
+    --text-dim: #86867f;
+    --accent: #2a6fb7;
+    --warn: #d35400;
+    --ok: #3d8b4a;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #050505;
+        --term-bg: #0b0b0b;
+        --border: #272727;
+        --text: #e0e0e0;
+        --text-dim: #7c7c7c;
+        --accent: #a44;
+        --warn: #ff8c00;
+        --ok: #5f9e6a;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: ui-monospace, 'SF Mono', 'Menlo', 'DejaVu Sans Mono', 'Consolas', 'Courier New', monospace;
+    background-color: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    margin: 0;
+    padding: 2.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 0.5rem;
+    }
+}

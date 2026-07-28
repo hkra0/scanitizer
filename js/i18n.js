@@ -1,0 +1,71 @@
+// UI strings, picked from the browser's preferred language at load time.
+
+const langPack = {
+    en: {
+        selectFile: "select PDF or images",
+        noFile: "No file selected",
+        passwordPrompt: "PDF password",
+        incorrectPassword: "incorrect password",
+        passwordNotProvided: "password not provided",
+        extracting: "extracting",
+        processing: "processing",
+        notScanned: "Non-scanned PDF, only metadata removed.",
+        noImages: "No images extracted",
+        saving: "saving...",
+        download: "download cleaned PDF",
+        failed: "PDF creation failed",
+        notReserved: "text content not reserved",
+        desc: "For scanned PDF cleanup or image to PDF;",
+        formatHeader: "output format:",
+        formatPdf: "pdf",
+        formatImages: "images",
+        formatZip: "images (zip)",
+        downloading: "downloading...",
+        zipping: "zipping...",
+        reset: "reset",
+        tagline: "all local, nothing is uploaded",
+        booting: "starting",
+        ready: "ready",
+        pagesReady: "pages ready",
+        metaCleaned: "metadata removed",
+        unsupported: "browser too old for image processing",
+    },
+    zh: {
+        selectFile: "选择 PDF 或图片",
+        noFile: "未选择文件",
+        passwordPrompt: "请输入 PDF 密码",
+        incorrectPassword: "密码错误，请重新输入",
+        passwordNotProvided: "未提供密码",
+        extracting: "提取",
+        processing: "处理",
+        notScanned: "非扫描 PDF，仅移除元数据",
+        noImages: "未提取到图像",
+        saving: "正在保存...",
+        download: "下载处理后 PDF",
+        failed: "PDF 创建失败",
+        notReserved: "文本内容未保留",
+        desc: "用于清理扫描件 PDF 或图片转 PDF",
+        formatHeader: "输出格式:",
+        formatPdf: "pdf",
+        formatImages: "逐张图片",
+        formatZip: "图片 (zip)",
+        downloading: "下载中...",
+        zipping: "打包中...",
+        reset: "重置",
+        tagline: "全部本地处理，文件不会上传",
+        booting: "启动中",
+        ready: "就绪",
+        pagesReady: "页已就绪",
+        metaCleaned: "元数据已移除",
+        unsupported: "浏览器版本过低，无法处理图像",
+    },
+};
+
+function detectLang() {
+    const preferred =
+        (navigator.languages && navigator.languages[0]) || navigator.language || 'en';
+    return preferred.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+}
+
+export const lang = detectLang();
+export const t = langPack[lang];

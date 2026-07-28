@@ -10,22 +10,22 @@
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/terminal.css">
 
-    <!-- Third-party libraries, loaded as globals and picked up by js/vendor.js.
-         All four assets (these three plus the pdf.js worker in js/vendor.js) come
-         from one origin, and every one is pinned with an SRI hash: a tampered or
-         swapped file is refused by the browser rather than being handed our
-         pages. Bump the hash whenever a version here changes — a stale hash
-         blocks the load, which vendor.js reports as [--] in the boot log. -->
+    <!-- Third-party libraries. The tags themselves are injected by js/vendor.js
+         once the page is up, so a slow CDN can no longer hold back the first
+         paint — the terminal draws its header straight away and each library
+         reports into the boot log as it lands. These hints only start the
+         fetches early; keep their URLs and SRI hashes in sync with the SCRIPTS
+         list in js/vendor.js, which is where they are documented. -->
     <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.10.111/pdf.js"
+    <link rel="preload" as="script" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.10.111/pdf.js"
         integrity="sha384-hPWOzdzzGESHvuwjQXU410pdrhU6LxPfeXLkWU0DJYApT04lwsOMl6xA32pAF0Io"
-        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"
+        crossorigin="anonymous" referrerpolicy="no-referrer">
+    <link rel="preload" as="script" href="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"
         integrity="sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI"
-        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+        crossorigin="anonymous" referrerpolicy="no-referrer">
+    <link rel="preload" as="script" href="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
         integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG"
-        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+        crossorigin="anonymous" referrerpolicy="no-referrer">
 
     <script type="module" src="js/app.js"></script>
 </head>

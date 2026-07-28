@@ -3,7 +3,7 @@
 // Everything runs in the browser — the file never leaves the page.
 
 import { t } from './i18n.js';
-import { pdfjsLib, PDFDocument, workerReady, canRaster } from './vendor.js';
+import { pdfjsLib, PDFDocument, vendorReady, canRaster } from './vendor.js';
 import { onSchemeChange } from './theme.js';
 import { extractImages } from './pdf/extract.js';
 import { createNewPdf, cleanSavePdf } from './pdf/build.js';
@@ -149,13 +149,18 @@ async function downloadAsZip() {
     if (!state.images || state.images.length === 0) return;
     state.stage = 'downloading';
     termStartProgress(t.zipping);
-    await downloadZip(state.images, baseNameOf(state.fileName));
+    try {
+        await downloadZip(state.images, baseNameOf(state.fileName));
+    } catch (err) {
+        console.error('Zipping failed:', err);
+        termWarn(t.failed);
+    }
     showDone(false);
 }
 
 // === Processing ===
 
-function handleFileSelection() {
+async function handleFileSelection() {
     if (state.stage === 'booting') return;
     state.stage = 'processing';
     clearWarnings();
@@ -178,6 +183,14 @@ function handleFileSelection() {
         t.extracting + '...',
         files.length > 1 ? `${state.fileName} +${files.length - 1}` : state.fileName
     );
+
+    // The PDF libraries stream in behind the start screen, so a file picked
+    // moments after load may arrive first; the progress line above is already
+    // up, so this just waits under the spinner
+    if (!await vendorReady) {
+        abortWith(t.libsUnavailable);
+        return;
+    }
 
     const isPdf = state.fileName.toLowerCase().endsWith('.pdf') ||
         files[0].type === 'application/pdf';
@@ -221,7 +234,6 @@ async function processPdf(file) {
     let gaveUpOnPassword = false;
 
     try {
-        await workerReady;   // the worker must be pinned before pdf.js starts
         const buffer = await readAsArrayBuffer(file);
         // pdf.js takes ownership of the buffer it is handed, so keep the
         // original around for the metadata-only path

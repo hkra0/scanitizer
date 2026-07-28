@@ -96,14 +96,21 @@ export async function boot() {
     await delay(TERM_DELAY);
     termGap(header);
 
-    // Dependency check, printed like a boot log
-    for (const [name, loaded] of DEPENDENCIES) {
+    // Dependency check, printed like a boot log. The libraries load in the
+    // background, so each line goes up as [..] straight away and flips to
+    // [ok]/[--] whenever its own load settles — boot doesn't wait on any of
+    // them, and the start screen is reachable while they are still arriving.
+    for (const [name, ready] of DEPENDENCIES) {
         const el = termLine('tl-dim', header);
         el.appendChild(document.createTextNode('  ' + name.padEnd(10, ' ')));
         const mark = document.createElement('span');
-        mark.className = loaded ? 'tl-ok' : 'tl-warn';
-        mark.textContent = loaded ? '[ok]' : '[--]';
+        mark.className = 'tl-dim';
+        mark.textContent = '[..]';
         el.appendChild(mark);
+        ready.then((loaded) => {
+            mark.className = loaded ? 'tl-ok' : 'tl-warn';
+            mark.textContent = loaded ? '[ok]' : '[--]';
+        });
         await delay(TERM_DELAY);
     }
 

@@ -1,7 +1,7 @@
 // Saving to disk. Everything is produced in-page as a Blob and handed to an
 // anchor click — no server, no upload.
 
-import { JSZip } from './vendor.js';
+import { JSZip, jszipReady } from './vendor.js';
 import { DOWNLOAD_INTERVAL, URL_LIFETIME } from './config.js';
 
 export function saveUrl(url, name) {
@@ -41,6 +41,9 @@ export async function downloadImages(images, baseName, onProgress) {
 }
 
 export async function downloadZip(images, baseName) {
+    // jszip is loaded in the background, and this is the only thing that needs
+    // it — by the time a file has been processed it has long since arrived
+    if (!(await jszipReady)) throw new Error('jszip unavailable');
     const zip = new JSZip();
     images.forEach((img, i) => {
         zip.file(pageFileName(baseName, i), img.blob);

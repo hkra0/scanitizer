@@ -23,6 +23,8 @@ import {
     renderDone,
     setMood,
     setKeepTextState,
+    toggleSettings,
+    openSettings,
 } from './screens.js';
 import { installKeyboard } from './keyboard.js';
 import {
@@ -81,6 +83,7 @@ function showDone(directDownload) {
         downloadPdf,
         downloadImages: downloadAsImages,
         downloadZip: downloadAsZip,
+        changeSettings,
         reset,
     });
 }
@@ -90,6 +93,14 @@ function releasePdfUrl() {
         URL.revokeObjectURL(state.pdfUrl);
         state.pdfUrl = null;
     }
+}
+
+// The way back from a finished run: the settings are read while a file is being
+// processed, so acting on a change means running the file again. Reset does the
+// discarding; this only makes sure the panel is already open on the way out.
+function changeSettings() {
+    openSettings();
+    reset();
 }
 
 function reset() {
@@ -334,6 +345,8 @@ installKeyboard({
     retry: () => location.reload(),
     canKeepText: () => hasTextLayer(state.images),
     toggleKeepText,
+    toggleSettings,
+    changeSettings,
     downloadPdf,
     downloadImages: downloadAsImages,
     downloadZip: downloadAsZip,

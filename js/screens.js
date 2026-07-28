@@ -6,6 +6,7 @@ import { getTool } from './theme.js';
 import { REPO_URL, TERM_DELAY } from './config.js';
 import { LOGO, LOGO_C, LOGO_C_END } from './logo.js';
 import { DEPENDENCIES } from './vendor.js';
+import { SETTINGS, currentValue, cycle } from './settings.js';
 import {
     delay,
     termHeaderTarget,
@@ -14,9 +15,11 @@ import {
     termText,
     termGap,
     termRule,
+    termBlock,
     termCaret,
     termOption,
-    termToggle,
+    termChoice,
+    setAdjust,
     setToggleState,
     termStopSpinner,
     renderLines,
@@ -31,22 +34,26 @@ const FACES = {
     done: '(๑• . •๑)',
 };
 
+// Value rows read as ‹ value ›, so it's clear the arrows step through a list
+const ANGLE = ['< ', ' >'];
+
 let face = null;      // the big mascot line, created during boot
 let mood = 'idle';
 
-// The text-layer toggle on the done screen, kept so its state can be updated
+// The text-layer row on the done screen, kept so its state can be updated
 // in place; null whenever the current screen doesn't show it
 let keepTextLine = null;
 
 /**
- * Repaint the text-layer toggle only. `busy` parks it on an ellipsis while the
+ * Repaint the text-layer row only. `busy` parks it on an ellipsis while the
  * PDF is being rebuilt, which is the whole point of updating in place: the
  * rest of the screen stays put instead of being cleared and replayed.
  */
 export function setKeepTextState(on, busy = false) {
     setToggleState(keepTextLine, {
-        on: on && !busy,
         label: busy ? t.busy : (on ? t.on : t.off),
+        cls: on && !busy ? 'tl-ok' : 'tl-dim',
+        wrap: ANGLE,
     });
 }
 
@@ -126,6 +133,7 @@ export async function boot() {
 // isn't usable yet, so no file option is offered
 export function renderLoading() {
     keepTextLine = null;
+    settingsToggle = null;
     return renderLines([
         () => termText(t.loadingLibs, 'tl-dim'),
         () => termGap(),
@@ -137,6 +145,7 @@ export function renderLoading() {
 // says so and offers a reload rather than a start screen that can't start
 export function renderUnavailable({ retry }) {
     keepTextLine = null;
+    settingsToggle = null;
     return renderLines([
         () => termText('! ' + t.libsUnavailable, 'tl-warn'),
         () => termGap(),
@@ -146,12 +155,80 @@ export function renderUnavailable({ retry }) {
     ]);
 }
 
+// === Settings ===
+
+// Whether the panel is folded open. Deliberately not persisted: the settings
+// themselves are, and the start screen should stay short by default.
+let settingsOpen = false;
+
+// Set while the start screen is up, so the 's' key can reach the panel
+let settingsToggle = null;
+
+export function toggleSettings() {
+    settingsToggle?.();
+    return settingsToggle !== null;
+}
+
+// Leave the panel folded open for the start screen that is about to be drawn.
+// The output screen's way back: the settings only bite during processing, so
+// changing them means starting over, and arriving at a start screen with the
+// panel already open saves unfolding it again.
+export function openSettings() {
+    settingsOpen = true;
+}
+
+// One row per setting, printed at once rather than line by line: a panel that
+// answers a keypress should be there by the time the eye gets to it
+function fillSettings(box) {
+    for (const setting of SETTINGS) {
+        let row;
+        const paint = (value) => setToggleState(row, { label: value.label, wrap: ANGLE });
+        row = termChoice(null, setting.label, { label: '', wrap: ANGLE }, (delta) => {
+            paint(cycle(setting, delta));
+        }, box);
+        paint(currentValue(setting));
+    }
+    termText(t.settingsHint, 'tl-dim tl-sub', box);
+}
+
 export function renderInit({ selectFile }) {
     keepTextLine = null;
+    let header = null;
+    let box = null;
+
+    const paintHeader = () =>
+        setToggleState(header, { label: settingsOpen ? '-' : '+', cls: 'tl-dim' });
+
+    // Folding is a local edit: only the panel's own rows come and go, so the
+    // screen around them is never cleared and replayed
+    const fold = (open) => {
+        // `box` lands a line after the header, so a keypress that beats the
+        // render out has nothing to fold yet
+        if (!box || open === settingsOpen) return;
+        settingsOpen = open;
+        paintHeader();
+        box.textContent = '';
+        if (settingsOpen) fillSettings(box);
+    };
+
+    settingsToggle = () => fold(!settingsOpen);
+
     return renderLines([
         () => termText(t.ready, 'tl-dim'),
         () => termGap(),
         () => termOption('enter', t.selectFile, selectFile),
+        () => termGap(),
+        () => {
+            header = termOption('s', t.settings, settingsToggle);
+            header.classList.add('tl-row');
+            paintHeader();
+            // The arrows open and shut it, the same keys that change a value
+            setAdjust(header, (delta) => fold(delta > 0));
+        },
+        () => {
+            box = termBlock();
+            if (settingsOpen) fillSettings(box);
+        },
         () => termGap(),
         () => termCaret(),
     ]);
@@ -162,7 +239,7 @@ export function renderInit({ selectFile }) {
  *                        the single possible output
  * @param actions         { onStart, setDoneMode, canKeepText, keepText,
  *                          toggleKeepText, downloadPdf, downloadImages,
- *                          downloadZip, reset }
+ *                          downloadZip, changeSettings, reset }
  */
 export async function renderDone(directDownload, pageCount, actions) {
     // Warnings own the screen until they expire; queue behind them
@@ -173,6 +250,7 @@ export async function renderDone(directDownload, pageCount, actions) {
     termStopSpinner();
     actions.onStart();
     keepTextLine = null;
+    settingsToggle = null;
 
     setAccent('var(--text)');
     setMood('done');
@@ -186,13 +264,16 @@ export async function renderDone(directDownload, pageCount, actions) {
         () => termGap(),
         () => { actions.setDoneMode('direct'); termOption('enter', t.download, actions.downloadPdf); },
         () => termGap(),
+        () => termOption('s', t.changeSettings, actions.changeSettings),
         () => termOption('0', t.reset, actions.reset),
         () => termGap(),
         () => termCaret(),
     ] : [
         () => termText(summary, 'tl-ok'),
         () => termGap(),
-        () => { actions.setDoneMode('format'); termText(t.formatHeader); },
+        // Each option downloads on the spot, so the header names the action;
+        // the options themselves say which format it lands in
+        () => { actions.setDoneMode('format'); termText(t.downloadHeader); },
         () => termOption('1', t.formatPdf, actions.downloadPdf),
         () => termOption('2', t.formatImages, actions.downloadImages),
         () => termOption('3', t.formatZip, actions.downloadZip),
@@ -202,16 +283,20 @@ export async function renderDone(directDownload, pageCount, actions) {
             () => termGap(),
             () => termText(t.optionHeader),
             () => {
-                keepTextLine = termToggle(
+                // Two values, stepped like every other one — either arrow
+                // lands on the other state
+                keepTextLine = termChoice(
                     't',
                     t.keepText,
-                    { on: actions.keepText, label: actions.keepText ? t.on : t.off },
+                    { label: actions.keepText ? t.on : t.off, wrap: ANGLE },
                     actions.toggleKeepText
                 );
+                setKeepTextState(actions.keepText);
             },
-            () => termText('  ' + t.keepTextNote, 'tl-dim'),
+            () => termText(t.keepTextNote, 'tl-dim tl-sub'),
         ] : []),
         () => termGap(),
+        () => termOption('s', t.changeSettings, actions.changeSettings),
         () => termOption('0', t.reset, actions.reset),
         () => termGap(),
         () => termCaret(),

@@ -10,12 +10,14 @@ export const SPINNER_INTERVAL = 200;              // ms per spinner frame
 export const WARN_DURATION = 2000;                // ms a warning line stays up
 
 // === Raster output ===
-// Page-sized JPEG budget, portrait orientation; swapped for landscape input
+// Default page-sized JPEG budget, portrait orientation; swapped for landscape
+// input. js/settings.js offers this alongside coarser and finer choices.
 export const MAX_PIXEL_WIDTH = 1931;
 export const MAX_PIXEL_HEIGHT = 2732;
 export const JPEG_QUALITY = 0.7;
 
 // === PDF page geometry (points) ===
+// The default sheet, and the long edge every `fit` page is scaled to
 export const PORTRAIT_WIDTH = 595;   // A4
 export const PORTRAIT_HEIGHT = 842;
 export const PAGE_MARGIN = 20;

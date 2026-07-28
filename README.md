@@ -9,6 +9,8 @@ Notes:
 - For scanned PDF with OCR text, the text is dropped by default; the output
   screen offers `[t]` to keep it. See [Keeping the text layer](#keeping-the-text-layer).
 - For non-scanned PDF, only metadata is removed.
+- Paper size, orientation, page margin and image compression are adjustable
+  under `[s]` on the start screen. See [Settings](#settings).
 
 ## Project structure
 
@@ -19,7 +21,8 @@ css/
   terminal.css      the faux-terminal window and its line styles
 js/
   app.js            entry point: app state, flow, wiring
-  config.js         tunables (timings, pixel budgets, page geometry)
+  config.js         tunables (timings, and the defaults settings.js starts on)
+  settings.js       the user-adjustable options, persisted in localStorage
   vendor.js         the CDN globals (pdf.js, pdf-lib, JSZip) in one place
   i18n.js           UI strings + language detection
   theme.js          colour-scheme-dependent mascot tool
@@ -41,11 +44,41 @@ The layering is one-way: `app.js` orchestrates, `screens.js` describes screens,
 pure processing that report progress through callbacks — they never touch the
 UI directly.
 
+## Settings
+
+`[s]` on the start screen folds open a panel of page and compression options.
+Every row is a list of values stepped with `←`/`→`, so a plain on/off option is
+just a two-value list and works exactly like the rest — including the text-layer
+option on the output screen.
+
+| setting | values | default |
+| --- | --- | --- |
+| paper size | a4, letter, legal, a3, a5, fit image | a4 |
+| orientation | auto, portrait, landscape | auto |
+| page margin | 0–40 pt | 20 pt |
+| jpeg quality | 50–95% | 70% |
+| max page pixels | 1754–3508 px on the long edge | 2732 px |
+
+Each default is what the app did before there were settings, so an untouched
+install is unchanged. `auto` turns the sheet to match the image, which is what
+keeps a portrait scan on a portrait page; `fit image` drops the fixed sheet
+entirely and cuts the page to the image's own proportions, so nothing is padded
+out with white.
+
+Choices are stored in `localStorage` and read while a file is being processed,
+so they can't be acted on retroactively — by the time the output screen is up,
+the page images have already been encoded at the quality and size that were set.
+Acting on a change therefore means running the file again, which is what `[s]`
+on the output screen does: it discards the result and returns to the start
+screen with the panel already open.
+
 ## Keeping the text layer
 
 Rebuilding a scan as fresh page images is what drops watermarks — and it drops
 the OCR text along with them. Turning `[t]` on at the output screen puts that
-text back, so the result stays selectable and searchable.
+text back, so the result stays selectable and searchable. Unlike the settings
+above it takes effect immediately: the page images are already encoded, so the
+PDF is simply rebuilt around them.
 
 How it survives the re-layout: the extractor records each text item in the
 coordinate space of the page image's *unit square* rather than in page

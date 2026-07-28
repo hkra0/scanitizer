@@ -25,8 +25,7 @@ let pendingFinish = null;
 // has been superseded and bail out
 let renderVersion = 0;
 
-let options = [];        // selectable lines on the current screen, in order
-let selIndex = -1;       // keyboard selection, -1 when the mouse is in charge
+let selEl = null;        // keyboard selection, null when the mouse is in charge
 let keyNavAnchor = null; // option the pointer rested on when keys took over
 
 export function delay(ms) {
@@ -73,11 +72,17 @@ export function termRule(target) {
     return termLine('tl-rule', target);
 }
 
+// A container for lines that come and go on their own, without redrawing the
+// screen around them — the settings panel folding open and shut
+export function termBlock(target) {
+    const el = document.createElement('div');
+    (target || termContent).appendChild(el);
+    return el;
+}
+
 export function termClear() {
     if (termContent) termContent.innerHTML = '';
     progressLine = null;
-    options = [];
-    selIndex = -1;
     endKeyNav();
 }
 
@@ -92,45 +97,73 @@ export function termCaret() {
 }
 
 /**
- * A selectable line carrying an on/off state, printed to the right of the
- * label like a settings row in a TUI.
+ * A selectable line carrying a state box, printed hard right of the label like
+ * a settings row in a TUI.
  *
- * @param state  { on, label } — `label` is already localized by the caller,
- *               since this module deliberately holds no strings
+ * @param state  { label, cls, wrap } — `label` is already localized by the
+ *               caller, since this module deliberately holds no strings
  */
-export function termToggle(key, text, state, onClick) {
-    const el = termOption(key, text, onClick);
-    el.appendChild(document.createElement('span')).className = 'tl-state';
+export function termToggle(key, text, state, onClick, target) {
+    const el = termOption(key, text, onClick, target);
+    el.classList.add('tl-row');
     setToggleState(el, state);
     return el;
 }
 
-// Flip a toggle's state box without redrawing anything around it, so changing
-// an option doesn't wipe and replay the screen it lives on
-export function setToggleState(el, state) {
-    const box = el?.querySelector('.tl-state');
-    if (!box) return;
-    box.className = 'tl-state ' + (state.on ? 'tl-ok' : 'tl-dim');
-    box.textContent = '  [' + state.label + ']';
+/**
+ * A row whose value is stepped rather than clicked through blindly: the
+ * left/right arrows call `onAdjust` with -1/+1, and a click is simply a step
+ * forward. Two-value lists cover what used to be a toggle, so on/off options
+ * and multi-value ones behave the same way.
+ */
+export function termChoice(key, text, state, onAdjust, target) {
+    const el = termToggle(key, text, state, () => onAdjust(1), target);
+    // Keyless rows are sub-items of the option above them; keyed ones line up
+    // with their siblings
+    if (!key) el.classList.add('tl-sub');
+    el._adjust = onAdjust;
+    return el;
 }
 
-export function termOption(key, text, onClick) {
-    const el = termLine('tl-option');
+// Let a plain option answer to the arrows too — the settings header folds open
+// on right and shut on left
+export function setAdjust(el, fn) {
+    if (el) el._adjust = fn;
+}
+
+// Repaint a row's state box without redrawing anything around it, so changing
+// an option doesn't wipe and replay the screen it lives on
+export function setToggleState(el, state) {
+    if (!el) return;
+    let box = el.querySelector('.tl-state');
+    if (!box) {
+        box = document.createElement('span');
+        el.appendChild(box);
+    }
+    const [open, close] = state.wrap || ['[', ']'];
+    box.className = 'tl-state ' + (state.cls || '');
+    box.textContent = open + state.label + close;
+}
+
+// `key` may be null for rows the arrows reach but no shortcut names
+export function termOption(key, text, onClick, target) {
+    const el = termLine('tl-option', target);
     const cursor = document.createElement('span');
     cursor.className = 'tl-cursor';
     cursor.textContent = '> ';
-    const keySpan = document.createElement('span');
-    keySpan.className = 'tl-key';
-    keySpan.textContent = '[' + key + ']';
     el.appendChild(cursor);
-    el.appendChild(keySpan);
-    el.appendChild(document.createTextNode(' ' + text));
+    if (key) {
+        const keySpan = document.createElement('span');
+        keySpan.className = 'tl-key';
+        keySpan.textContent = '[' + key + ']';
+        el.appendChild(keySpan);
+    }
+    el.appendChild(document.createTextNode(key ? ' ' + text : text));
     el.addEventListener('click', onClick);
     // Moving onto a different option hands control back to the mouse
     el.addEventListener('mouseenter', () => {
         if (keyNavAnchor !== el) endKeyNav();
     });
-    options.push(el);
     return el;
 }
 
@@ -255,38 +288,64 @@ export function clearWarnings() {
 
 // === Option selection ===
 
+// The selectable lines of the current screen, in the order they are printed.
+// Read from the DOM rather than kept in a list, so rows the settings panel adds
+// and removes are picked up without any bookkeeping.
+function optionEls() {
+    return termContent ? Array.from(termContent.querySelectorAll('.tl-option')) : [];
+}
+
 // While the keyboard drives the menu, hover highlighting is suppressed so
 // the two cursors can't both be lit; it stays that way until the pointer
 // actually crosses into another option
 export function endKeyNav() {
     keyNavAnchor = null;
     document.body.classList.remove('key-nav');
-    if (selIndex >= 0) {
-        if (options[selIndex]) options[selIndex].classList.remove('is-sel');
-        selIndex = -1;
-    }
+    selEl?.classList.remove('is-sel');
+    selEl = null;
 }
 
 export function moveSelection(delta) {
-    if (options.length === 0) return false;
+    const list = optionEls();
+    if (list.length === 0) return false;
     if (!document.body.classList.contains('key-nav')) {
         // Remember where the pointer was resting when the keyboard took over
-        keyNavAnchor = options.find((el) => el.matches(':hover')) || null;
+        keyNavAnchor = list.find((el) => el.matches(':hover')) || null;
         document.body.classList.add('key-nav');
         // Start from the hovered option, so arrows continue from there
-        selIndex = keyNavAnchor ? options.indexOf(keyNavAnchor) : (delta > 0 ? -1 : 0);
+        selEl = keyNavAnchor;
     }
-    if (options[selIndex]) options[selIndex].classList.remove('is-sel');
-    selIndex = (selIndex + delta + options.length) % options.length;
-    options[selIndex].classList.add('is-sel');
+    // A missing selection — first keypress, or a row that folded away — starts
+    // just outside the list so the first step lands on either end
+    let index = selEl ? list.indexOf(selEl) : -1;
+    if (index < 0) index = delta > 0 ? -1 : 0;
+    selEl?.classList.remove('is-sel');
+    selEl = list[(index + delta + list.length) % list.length];
+    selEl.classList.add('is-sel');
     return true;
+}
+
+// The row the arrows and Enter act on: the keyboard's, or whatever the pointer
+// is resting on when the keyboard hasn't taken over
+function activeOption() {
+    if (selEl) return selEl;
+    return optionEls().find((el) => el.matches(':hover')) || null;
 }
 
 // Activate the keyboard-selected option, if any
 export function activateSelection() {
-    if (selIndex >= 0 && options[selIndex]) {
-        options[selIndex].click();
+    if (selEl) {
+        selEl.click();
         return true;
     }
     return false;
+}
+
+// Step the active row's value. Rows without one leave the arrows unhandled, so
+// the browser keeps its usual horizontal scrolling.
+export function adjustSelection(delta) {
+    const el = activeOption();
+    if (!el?._adjust) return false;
+    el._adjust(delta);
+    return true;
 }

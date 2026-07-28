@@ -2,19 +2,35 @@
 
 import { PDFDocument, PDFName } from '../vendor.js';
 import { drawTextLayer, finalizeTextLayer } from './textlayer.js';
-import {
-    PORTRAIT_WIDTH,
-    PORTRAIT_HEIGHT,
-    PAGE_MARGIN,
-    METADATA_FIELDS,
-} from '../config.js';
-
-const LANDSCAPE_WIDTH = PORTRAIT_HEIGHT;
-const LANDSCAPE_HEIGHT = PORTRAIT_WIDTH;
+import { pageLayout } from '../settings.js';
+import { PORTRAIT_HEIGHT, METADATA_FIELDS } from '../config.js';
 
 /**
- * One A4 page per image, orientation matched to the image, centred within a
- * uniform margin.
+ * The sheet a single image is placed on, in points.
+ *
+ * With a paper size chosen, the sheet is fixed and the image is centred on it;
+ * `auto` turns the sheet to match the image, which is what leaves a portrait
+ * scan on a portrait page. With `fit` there is no sheet at all — the page is
+ * cut to the image's own proportions, sized so its long edge matches A4's, so
+ * nothing is padded out with white and the orientation setting has nothing to
+ * decide.
+ */
+function sheetFor(imgWidth, imgHeight, { paper, orientation, margin }) {
+    if (!paper) {
+        const long = PORTRAIT_HEIGHT - 2 * margin;
+        const short = long * Math.min(imgWidth, imgHeight) / Math.max(imgWidth, imgHeight);
+        const [w, h] = imgWidth > imgHeight ? [long, short] : [short, long];
+        return [w + 2 * margin, h + 2 * margin];
+    }
+    const [portraitWidth, portraitHeight] = paper;
+    const landscape = orientation === 'landscape' ||
+        (orientation === 'auto' && imgWidth > imgHeight);
+    return landscape ? [portraitHeight, portraitWidth] : [portraitWidth, portraitHeight];
+}
+
+/**
+ * One page per image, laid out per the user's page settings and centred within
+ * a uniform margin.
  *
  * @param extractedImages  [{ page, blob, width, height, texts }]
  * @param onProgress       (current, total) => void
@@ -23,6 +39,8 @@ const LANDSCAPE_HEIGHT = PORTRAIT_WIDTH;
  */
 export async function createNewPdf(extractedImages, onProgress, { keepText = false } = {}) {
     const pdfDoc = await PDFDocument.create();
+    const layout = pageLayout();
+    const margin = layout.margin;
     extractedImages.sort((a, b) => a.page - b.page);
 
     for (const img of extractedImages) {
@@ -35,19 +53,17 @@ export async function createNewPdf(extractedImages, onProgress, { keepText = fal
 
         const imgWidth = pdfImage.width;
         const imgHeight = pdfImage.height;
-        const isLandscape = imgWidth > imgHeight;
-        const pageWidth = isLandscape ? LANDSCAPE_WIDTH : PORTRAIT_WIDTH;
-        const pageHeight = isLandscape ? LANDSCAPE_HEIGHT : PORTRAIT_HEIGHT;
+        const [pageWidth, pageHeight] = sheetFor(imgWidth, imgHeight, layout);
 
         const page = pdfDoc.addPage([pageWidth, pageHeight]);
-        const maxWidth = pageWidth - 2 * PAGE_MARGIN;
-        const maxHeight = pageHeight - 2 * PAGE_MARGIN;
+        const maxWidth = pageWidth - 2 * margin;
+        const maxHeight = pageHeight - 2 * margin;
         const scale = Math.min(maxWidth / imgWidth, maxHeight / imgHeight);
         const scaledWidth = imgWidth * scale;
         const scaledHeight = imgHeight * scale;
 
-        const x = PAGE_MARGIN + (maxWidth - scaledWidth) / 2;
-        const y = PAGE_MARGIN + (maxHeight - scaledHeight) / 2;
+        const x = margin + (maxWidth - scaledWidth) / 2;
+        const y = margin + (maxHeight - scaledHeight) / 2;
         page.drawImage(pdfImage, { x, y, width: scaledWidth, height: scaledHeight });
 
         // The image's placement, as the matrix the text items are relative to

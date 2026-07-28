@@ -62,6 +62,22 @@ as it goes. CJK and every other script cost a few hundred bytes, instead of the
 multi-megabyte font an embedded approach would need. A typical page's text
 layer, font and CMap included, adds well under 1 KB.
 
+Nothing about this is language-conditional: no font is fetched for any
+document, so an all-English scan and a Chinese one make exactly the same
+network requests — the three CDN libraries and the pdf.js worker, and that is
+all. There is no script that can be "missing a font", because no glyph is ever
+drawn. A document can use at most 65534 distinct characters, which no real page
+of text approaches.
+
+Right-to-left text needs one extra step. pdf.js resolves bidi before handing
+text back, so Arabic or Hebrew arrives in *visual* order; storing that verbatim
+would reverse it, since whatever reads the output applies bidi a second time.
+`extract.js` undoes the reversal so exactly one pass happens overall. The
+inverse is matched to how pdf.js orders text rather than derived from the bidi
+algorithm — pdf.js splits runs by glyph spacing, so a mixed-script run, or an
+unusual layout that makes it segment differently, can still come out with words
+in the wrong order.
+
 **The recovered text is not sanitized.** It is copied verbatim from the source,
 so a text watermark comes along with it — invisible in the output, but still
 extractable. Telling an OCR layer apart from page furniture needs the text

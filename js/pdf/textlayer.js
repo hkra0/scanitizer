@@ -76,10 +76,15 @@ function codeFor(registry, char) {
 
 const hex4 = (n) => n.toString(16).padStart(4, '0').toUpperCase();
 
-// A character as UTF-16BE, which is what a ToUnicode destination string is;
-// astral characters come out as their surrogate pair
-const utf16be = (char) =>
-    Array.from(char, (_, i) => hex4(char.charCodeAt(i))).join('');
+// A character as UTF-16BE, which is what a ToUnicode destination string is.
+// Iteration is over code *units*, not code points: an astral character has to
+// come out as both halves of its surrogate pair, and `Array.from` would hand
+// back the whole character as one element and lose the low half.
+function utf16be(char) {
+    let hex = '';
+    for (let i = 0; i < char.length; i++) hex += hex4(char.charCodeAt(i));
+    return hex;
+}
 
 function num(n) {
     // Content streams can't carry NaN or Infinity, and pdf-lib won't catch it

@@ -84,6 +84,32 @@ function pickPageImage(rawImages) {
 }
 
 /**
+ * pdf.js resolves bidi before handing text back, so a right-to-left run
+ * arrives in *visual* order with `dir` set to 'rtl'. Storing that verbatim
+ * would reverse the text: whatever reads our output applies bidi again, on a
+ * string that has already been through it once. Undoing it here means one bidi
+ * pass total, and the output extracts the way the source did.
+ *
+ * What pdf.js does to an RTL run is reverse each whitespace-separated piece
+ * while leaving the pieces where they are, so doing the same again inverts it.
+ * Reversing the string as a whole does not: it would swap the word order too.
+ * Iterating with the spread operator walks code points, so surrogate pairs
+ * survive intact.
+ *
+ * This is matched to how pdf.js orders text, not derived from the bidi
+ * algorithm, so a run that mixes scripts — Arabic with Latin or digits inside
+ * it — can still come back out of order. A uniformly RTL run, which is what a
+ * page of scanned text gives, round-trips exactly.
+ */
+function toLogicalOrder(item) {
+    if (item.dir !== 'rtl') return item.str;
+    return item.str
+        .split(/(\s+)/)
+        .map((piece) => (/^\s*$/.test(piece) ? piece : [...piece].reverse().join('')))
+        .join('');
+}
+
+/**
  * Re-express the page's text items in the coordinate space of the picked
  * image's unit square: origin at the image's bottom-left corner, 1.0 across
  * and 1.0 up. Items whose origin falls outside that square belong to something
@@ -113,7 +139,7 @@ function collectTextItems(textContent, imageMatrix) {
         const [u, v] = [matrix[4], matrix[5]];
         if (u < min || u > max || v < min || v > max) continue;
         items.push({
-            str: item.str,
+            str: toLogicalOrder(item),
             matrix,
             width: width ? item.width / width : 0,
             height: height ? item.height / height : 0,

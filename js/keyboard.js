@@ -4,7 +4,7 @@
 import { moveSelection, endKeyNav, activateSelection } from './terminal.js';
 
 /**
- * @param handlers  { getStage, getDoneMode, selectFile, canKeepText,
+ * @param handlers  { getStage, getDoneMode, selectFile, retry, canKeepText,
  *                    toggleKeepText, downloadPdf, downloadImages,
  *                    downloadZip, reset }
  */
@@ -23,6 +23,9 @@ export function installKeyboard(handlers) {
             handled = true;
         } else if (stage === 'init' && e.key === 'Enter') {
             handlers.selectFile();
+            handled = true;
+        } else if (stage === 'blocked' && (e.key === 'r' || e.key === 'R')) {
+            handlers.retry();
             handled = true;
         } else if (stage === 'done') {
             const doneMode = handlers.getDoneMode();

@@ -3,7 +3,7 @@
 // Everything runs in the browser — the file never leaves the page.
 
 import { t } from './i18n.js';
-import { pdfjsLib, PDFDocument, vendorReady, canRaster } from './vendor.js';
+import { pdfjsLib, PDFDocument, vendorReady, vendorState, canRaster } from './vendor.js';
 import { onSchemeChange } from './theme.js';
 import { extractImages } from './pdf/extract.js';
 import { createNewPdf, cleanSavePdf } from './pdf/build.js';
@@ -15,7 +15,15 @@ import {
     downloadZip,
     baseNameOf,
 } from './download.js';
-import { boot, renderInit, renderDone, setMood, setKeepTextState } from './screens.js';
+import {
+    boot,
+    renderInit,
+    renderLoading,
+    renderUnavailable,
+    renderDone,
+    setMood,
+    setKeepTextState,
+} from './screens.js';
 import { installKeyboard } from './keyboard.js';
 import {
     initTerminal,
@@ -34,7 +42,9 @@ const fileInput = document.getElementById('fileInput');
 
 const state = {
     fileName: '',
-    stage: 'booting',   // booting | init | processing | downloading | done
+    // booting | blocked (libraries missing) | init | processing |
+    // downloading | done
+    stage: 'booting',
     doneMode: null,     // 'direct' (PDF only) | 'format' (pdf/images/zip)
     pdfUrl: null,       // object URL of the cleaned PDF
     pdfName: null,
@@ -321,6 +331,7 @@ installKeyboard({
     getStage: () => state.stage,
     getDoneMode: () => state.doneMode,
     selectFile: () => fileInput.click(),
+    retry: () => location.reload(),
     canKeepText: () => hasTextLayer(state.images),
     toggleKeepText,
     downloadPdf,
@@ -332,4 +343,18 @@ installKeyboard({
 // The mascot's tool follows the colour scheme, so redraw the face on a switch
 onSchemeChange(() => setMood());
 
-boot().then(showInit);
+// The header goes up first, then the start screen — but only once the
+// libraries are actually there. Anything else would print "ready" over an app
+// that can't open a file: while they are still in flight the screen says so,
+// and if they never arrive it's a dead end with a reload rather than a start
+// screen that fails on the first click.
+(async function start() {
+    await boot();
+    if (vendorState === 'pending') renderLoading();
+    if (await vendorReady) {
+        showInit();
+    } else {
+        state.stage = 'blocked';
+        renderUnavailable({ retry: () => location.reload() });
+    }
+})();

@@ -34,7 +34,9 @@ const langPack = {
         pagesReady: "pages ready",
         metaCleaned: "metadata removed",
         unsupported: "browser too old for image processing",
-        libsUnavailable: "libraries not loaded, check your connection",
+        loadingLibs: "loading libraries...",
+        libsUnavailable: "libraries failed to load, check your connection",
+        retry: "retry",
     },
     zh: {
         selectFile: "选择 PDF 或图片",
@@ -69,7 +71,9 @@ const langPack = {
         pagesReady: "页已就绪",
         metaCleaned: "元数据已移除",
         unsupported: "浏览器版本过低，无法处理图像",
-        libsUnavailable: "依赖库未加载，请检查网络连接",
+        loadingLibs: "正在加载依赖库...",
+        libsUnavailable: "依赖库加载失败，请检查网络连接",
+        retry: "重试",
     },
 };
 

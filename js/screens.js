@@ -122,6 +122,30 @@ export async function boot() {
 
 // === Stages ===
 
+// Shown when the libraries are still in flight after the header is up: the app
+// isn't usable yet, so no file option is offered
+export function renderLoading() {
+    keepTextLine = null;
+    return renderLines([
+        () => termText(t.loadingLibs, 'tl-dim'),
+        () => termGap(),
+        () => termCaret(),
+    ]);
+}
+
+// Dead end: without pdf.js and pdf-lib there is nothing the app can do, so it
+// says so and offers a reload rather than a start screen that can't start
+export function renderUnavailable({ retry }) {
+    keepTextLine = null;
+    return renderLines([
+        () => termText('! ' + t.libsUnavailable, 'tl-warn'),
+        () => termGap(),
+        () => termOption('r', t.retry, retry),
+        () => termGap(),
+        () => termCaret(),
+    ]);
+}
+
 export function renderInit({ selectFile }) {
     keepTextLine = null;
     return renderLines([

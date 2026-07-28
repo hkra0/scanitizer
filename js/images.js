@@ -6,7 +6,10 @@ import { rasterize, closeBitmap } from './raster.js';
 /**
  * @param files       a File list of images
  * @param onProgress  (current, total) => void
- * @returns  [{ page, blob, width, height }] — files that fail to decode are skipped
+ * @returns  [{ page, blob, width, height, texts }] — files that fail to decode
+ *           are skipped. `texts` is always empty: a picked image file has no
+ *           text layer to carry over, but the key is present so consumers can
+ *           treat both sources alike.
  */
 export async function processImageFiles(files, onProgress) {
     const extractedImages = [];
@@ -17,7 +20,7 @@ export async function processImageFiles(files, onProgress) {
         try {
             bmp = await createImageBitmap(file);
             const { blob, width, height } = await rasterize(bmp, { orient: true });
-            extractedImages.push({ page: i + 1, blob, width, height });
+            extractedImages.push({ page: i + 1, blob, width, height, texts: [] });
         } catch (err) {
             console.warn(`Image processing failed for ${file.name}:`, err);
         } finally {

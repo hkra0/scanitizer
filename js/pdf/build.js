@@ -1,6 +1,7 @@
 // Assemble the extracted page images into a fresh, metadata-free PDF.
 
 import { PDFDocument, PDFName } from '../vendor.js';
+import { drawTextLayer, finalizeTextLayer } from './textlayer.js';
 import {
     PORTRAIT_WIDTH,
     PORTRAIT_HEIGHT,
@@ -15,10 +16,12 @@ const LANDSCAPE_HEIGHT = PORTRAIT_WIDTH;
  * One A4 page per image, orientation matched to the image, centred within a
  * uniform margin.
  *
- * @param extractedImages  [{ page, blob, width, height }]
+ * @param extractedImages  [{ page, blob, width, height, texts }]
  * @param onProgress       (current, total) => void
+ * @param keepText         when true, the source text items travel with the
+ *                         image and are re-drawn invisibly on top of it
  */
-export async function createNewPdf(extractedImages, onProgress) {
+export async function createNewPdf(extractedImages, onProgress, { keepText = false } = {}) {
     const pdfDoc = await PDFDocument.create();
     extractedImages.sort((a, b) => a.page - b.page);
 
@@ -43,13 +46,16 @@ export async function createNewPdf(extractedImages, onProgress) {
         const scaledWidth = imgWidth * scale;
         const scaledHeight = imgHeight * scale;
 
-        page.drawImage(pdfImage, {
-            x: PAGE_MARGIN + (maxWidth - scaledWidth) / 2,
-            y: PAGE_MARGIN + (maxHeight - scaledHeight) / 2,
-            width: scaledWidth,
-            height: scaledHeight,
-        });
+        const x = PAGE_MARGIN + (maxWidth - scaledWidth) / 2;
+        const y = PAGE_MARGIN + (maxHeight - scaledHeight) / 2;
+        page.drawImage(pdfImage, { x, y, width: scaledWidth, height: scaledHeight });
+
+        // The image's placement, as the matrix the text items are relative to
+        if (keepText) {
+            drawTextLayer(pdfDoc, page, img.texts, [scaledWidth, 0, 0, scaledHeight, x, y]);
+        }
     }
+    if (keepText) finalizeTextLayer(pdfDoc);
     return pdfDoc;
 }
 

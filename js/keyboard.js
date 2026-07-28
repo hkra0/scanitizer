@@ -4,8 +4,9 @@
 import { moveSelection, endKeyNav, activateSelection } from './terminal.js';
 
 /**
- * @param handlers  { getStage, getDoneMode, selectFile, downloadPdf,
- *                    downloadImages, downloadZip, reset }
+ * @param handlers  { getStage, getDoneMode, selectFile, canKeepText,
+ *                    toggleKeepText, downloadPdf, downloadImages,
+ *                    downloadZip, reset }
  */
 export function installKeyboard(handlers) {
     document.addEventListener('keydown', (e) => {
@@ -31,6 +32,10 @@ export function installKeyboard(handlers) {
                 if (e.key === '1') { handlers.downloadPdf(); handled = true; }
                 else if (e.key === '2') { handlers.downloadImages(); handled = true; }
                 else if (e.key === '3') { handlers.downloadZip(); handled = true; }
+                else if ((e.key === 't' || e.key === 'T') && handlers.canKeepText()) {
+                    handlers.toggleKeepText();
+                    handled = true;
+                }
             }
         }
 

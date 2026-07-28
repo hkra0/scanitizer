@@ -16,6 +16,8 @@ import {
     termRule,
     termCaret,
     termOption,
+    termToggle,
+    setToggleState,
     termStopSpinner,
     renderLines,
     registerLogoCell,
@@ -31,6 +33,22 @@ const FACES = {
 
 let face = null;      // the big mascot line, created during boot
 let mood = 'idle';
+
+// The text-layer toggle on the done screen, kept so its state can be updated
+// in place; null whenever the current screen doesn't show it
+let keepTextLine = null;
+
+/**
+ * Repaint the text-layer toggle only. `busy` parks it on an ellipsis while the
+ * PDF is being rebuilt, which is the whole point of updating in place: the
+ * rest of the screen stays put instead of being cleared and replayed.
+ */
+export function setKeepTextState(on, busy = false) {
+    setToggleState(keepTextLine, {
+        on: on && !busy,
+        label: busy ? t.busy : (on ? t.on : t.off),
+    });
+}
 
 // Face and document title always move together
 export function setMood(next) {
@@ -98,6 +116,7 @@ export async function boot() {
 // === Stages ===
 
 export function renderInit({ selectFile }) {
+    keepTextLine = null;
     return renderLines([
         () => termText(t.ready, 'tl-dim'),
         () => termGap(),
@@ -110,7 +129,8 @@ export function renderInit({ selectFile }) {
 /**
  * @param directDownload  true when only metadata was stripped, so the PDF is
  *                        the single possible output
- * @param actions         { onStart, setDoneMode, downloadPdf, downloadImages,
+ * @param actions         { onStart, setDoneMode, canKeepText, keepText,
+ *                          toggleKeepText, downloadPdf, downloadImages,
  *                          downloadZip, reset }
  */
 export async function renderDone(directDownload, pageCount, actions) {
@@ -121,6 +141,7 @@ export async function renderDone(directDownload, pageCount, actions) {
     }
     termStopSpinner();
     actions.onStart();
+    keepTextLine = null;
 
     setAccent('var(--text)');
     setMood('done');
@@ -144,6 +165,21 @@ export async function renderDone(directDownload, pageCount, actions) {
         () => termOption('1', t.formatPdf, actions.downloadPdf),
         () => termOption('2', t.formatImages, actions.downloadImages),
         () => termOption('3', t.formatZip, actions.downloadZip),
+        // Off by default: the recovered text comes straight from the source
+        // and, unlike the images, has not been through the cleanup
+        ...(actions.canKeepText ? [
+            () => termGap(),
+            () => termText(t.optionHeader),
+            () => {
+                keepTextLine = termToggle(
+                    't',
+                    t.keepText,
+                    { on: actions.keepText, label: actions.keepText ? t.on : t.off },
+                    actions.toggleKeepText
+                );
+            },
+            () => termText('  ' + t.keepTextNote, 'tl-dim'),
+        ] : []),
         () => termGap(),
         () => termOption('0', t.reset, actions.reset),
         () => termGap(),

@@ -4,35 +4,22 @@
 // list, track the CTM so we know how large each image is painted, and keep the
 // biggest one. Pages with no such image are counted as non-scanned, and once
 // enough of them pile up we give up and report the document as not a scan.
+//
+// The winning image's full CTM is kept, not just its size: the page's text
+// items are re-expressed relative to that image's unit square, so whoever
+// re-lays the image out later can place the text on top of it without knowing
+// anything about the original page geometry.
 
 import { pdfjsLib } from '../vendor.js';
 import { rasterize } from '../raster.js';
+import { multiplyMatrices, invertMatrix, paintedSize } from './matrix.js';
 
 const RENDER_SCALE = 1.5;
 const MIN_PAINTED_SIZE = 500;   // ignore decorations, logos and stamps
-const TEXT_ITEM_THRESHOLD = 20; // items on a page before it counts as "texted"
-
-function multiplyMatrices(m1, m2) {
-    return [
-        m1[0] * m2[0] + m1[2] * m2[1],
-        m1[1] * m2[0] + m1[3] * m2[1],
-        m1[0] * m2[2] + m1[2] * m2[3],
-        m1[1] * m2[2] + m1[3] * m2[3],
-        m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
-        m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
-    ];
-}
-
-// matrix: [a, b, c, d, e, f] — a,d: scaleX, scaleY; e,f: x,y
-// only the main diagonal is used, skew is ignored
-function extractPositionAndSize(matrix) {
-    return {
-        x: matrix[4],
-        y: matrix[5],
-        scaleX: matrix[0],
-        scaleY: matrix[3],
-    };
-}
+// How far outside the image a text item's origin may sit and still count as
+// belonging to it — glyphs on the very edge of a scan routinely land a hair
+// outside the painted box.
+const HIT_TOLERANCE = 0.02;
 
 // Replay the operator list, resolving each painted image against the CTM
 function collectPaintedImages(ops) {
@@ -52,11 +39,14 @@ function collectPaintedImages(ops) {
                     matrixStack: [...matrixStack, [...currentMatrix]] // copy current matrix
                 };
 
+            // Pop the matrix `save` pushed. Reading one slot deeper, as this
+            // used to, restores the *enclosing* save's matrix and silently
+            // mislocates every image inside a nested q/Q pair.
             case pdfjsLib.OPS.restore:
                 return {
                     ...state,
                     matrixStack: matrixStack.slice(0, -1), // remove last matrix
-                    currentMatrix: matrixStack[matrixStack.length - 2] || [1, 0, 0, 1, 0, 0]
+                    currentMatrix: matrixStack[matrixStack.length - 1] || [1, 0, 0, 1, 0, 0]
                 };
 
             case pdfjsLib.OPS.transform:
@@ -69,7 +59,7 @@ function collectPaintedImages(ops) {
             case pdfjsLib.OPS.paintJpegXObject:
                 return {
                     ...state,
-                    images: [...images, { imageName: args[0], pos: extractPositionAndSize(currentMatrix) }]
+                    images: [...images, { imageName: args[0], matrix: [...currentMatrix] }]
                 };
 
             default:
@@ -83,33 +73,72 @@ function collectPaintedImages(ops) {
 // masks by their 'g_' name prefix.
 function pickPageImage(rawImages) {
     let best = null;
-    for (const { imageName, pos } of rawImages) {
+    for (const { imageName, matrix } of rawImages) {
         if (imageName.startsWith('g_')) continue;
-        if (pos.scaleX < MIN_PAINTED_SIZE && pos.scaleY < MIN_PAINTED_SIZE) continue;
-        const area = pos.scaleX * pos.scaleY;
-        if (!best || area > best.area) best = { imageName, area };
+        const { width, height } = paintedSize(matrix);
+        if (width < MIN_PAINTED_SIZE && height < MIN_PAINTED_SIZE) continue;
+        const area = width * height;
+        if (!best || area > best.area) best = { imageName, area, matrix };
     }
     return best;
 }
 
 /**
- * @param pdf              a pdf.js document proxy
- * @param onProgress       (current, total) => void
- * @param onTextDetected   called once when the document turns out to carry text
- * @returns  an array of page images, or `false` if this is not a scanned PDF
+ * Re-express the page's text items in the coordinate space of the picked
+ * image's unit square: origin at the image's bottom-left corner, 1.0 across
+ * and 1.0 up. Items whose origin falls outside that square belong to something
+ * else on the page (a second image, page furniture, a margin stamp) and are
+ * dropped, since nothing downstream knows where to put them.
+ *
+ * Each surviving item carries `matrix`, its own text matrix composed into that
+ * normalized space. Placing the image at [w 0 0 h x y] later and composing
+ * that on top puts the text back exactly where it sat on the original page,
+ * rotation, flips and skew included.
+ *
+ * @param textContent  the result of page.getTextContent()
+ * @param imageMatrix  the picked image's CTM
  */
-export async function extractImages(pdf, { onProgress, onTextDetected } = {}) {
+function collectTextItems(textContent, imageMatrix) {
+    const inverse = invertMatrix(imageMatrix);
+    if (!inverse) return [];
+    const { width, height } = paintedSize(imageMatrix);
+    const min = -HIT_TOLERANCE;
+    const max = 1 + HIT_TOLERANCE;
+
+    const items = [];
+    for (const item of textContent.items) {
+        if (!item.str || !item.transform) continue;   // marked-content markers
+        // apply the item's own transform, then map page space into image space
+        const matrix = multiplyMatrices(inverse, item.transform);
+        const [u, v] = [matrix[4], matrix[5]];
+        if (u < min || u > max || v < min || v > max) continue;
+        items.push({
+            str: item.str,
+            matrix,
+            width: width ? item.width / width : 0,
+            height: height ? item.height / height : 0,
+            dir: item.dir,
+            hasEOL: item.hasEOL,
+        });
+    }
+    return items;
+}
+
+/**
+ * @param pdf         a pdf.js document proxy
+ * @param onProgress  (current, total) => void
+ * @returns  an array of page images — each with a `texts` array holding the
+ *           page's text items in image-normalized coordinates — or `false` if
+ *           this is not a scanned PDF
+ */
+export async function extractImages(pdf, { onProgress } = {}) {
     const numPages = pdf.numPages;
     const extractedImages = [];
-    let textedCount = 0;      // pages that look like they carry real text
-    let textWarned = false;   // the text warning is only worth showing once
     let nonScannedCount = 0;  // pages with no page-sized image
 
     // Image-less pages tolerated before we call the whole document non-scanned:
     // a third of it, but never fewer than 3 pages and never more than it has
     const giveUpAfter = Math.min(Math.max(3, Math.round(numPages / 3)), numPages);
-    // Text-carrying pages seen before the "text will be dropped" warning fires
-    const warnAfterTexted = Math.min(3, numPages);
 
     for (let curPage = 1; curPage <= numPages; curPage++) {
         onProgress?.(curPage, numPages);
@@ -127,13 +156,22 @@ export async function extractImages(pdf, { onProgress, onTextDetected } = {}) {
 
         const candidate = pickPageImage(collectPaintedImages(await page.getOperatorList()));
 
+        const textContent = await page.getTextContent();
+
         // Only the winner is decoded and re-encoded — one rasterize per page
         let pageImage = null;
         if (candidate) {
             try {
                 const image = await page.objs.get(candidate.imageName);
                 const { blob, width, height } = await rasterize(image.bitmap);
-                pageImage = { page: curPage, blob, width, height, viewport };
+                pageImage = {
+                    page: curPage,
+                    blob,
+                    width,
+                    height,
+                    viewport,
+                    texts: collectTextItems(textContent, candidate.matrix),
+                };
             } catch (err) {
                 console.warn(`Image extraction failed for ${candidate.imageName}:`, err);
             }
@@ -146,26 +184,12 @@ export async function extractImages(pdf, { onProgress, onTextDetected } = {}) {
             extractedImages.push(pageImage);
         }
 
-        // check if texted
-        if (!textWarned && textedCount < warnAfterTexted) {
-            const textContent = await page.getTextContent();
-            if (textContent.items.length > TEXT_ITEM_THRESHOLD) {
-                textedCount++;
-            }
-        }
-
         // Release the page's decoded bitmaps before moving on; without this a
         // long scan keeps every page's pixels alive until the document closes
         page.cleanup();
 
-        if (nonScannedCount >= giveUpAfter) {
-            // non-scanned PDF
-            return false;
-        } else if (!textWarned && textedCount >= warnAfterTexted && nonScannedCount < 3) {
-            // PDF has text that the image-only output will drop; warn once
-            onTextDetected?.();
-            textWarned = true;
-        }
+        // non-scanned PDF
+        if (nonScannedCount >= giveUpAfter) return false;
     }
     return extractedImages;
 }

@@ -91,6 +91,29 @@ export function termCaret() {
     return el;
 }
 
+/**
+ * A selectable line carrying an on/off state, printed to the right of the
+ * label like a settings row in a TUI.
+ *
+ * @param state  { on, label } — `label` is already localized by the caller,
+ *               since this module deliberately holds no strings
+ */
+export function termToggle(key, text, state, onClick) {
+    const el = termOption(key, text, onClick);
+    el.appendChild(document.createElement('span')).className = 'tl-state';
+    setToggleState(el, state);
+    return el;
+}
+
+// Flip a toggle's state box without redrawing anything around it, so changing
+// an option doesn't wipe and replay the screen it lives on
+export function setToggleState(el, state) {
+    const box = el?.querySelector('.tl-state');
+    if (!box) return;
+    box.className = 'tl-state ' + (state.on ? 'tl-ok' : 'tl-dim');
+    box.textContent = '  [' + state.label + ']';
+}
+
 export function termOption(key, text, onClick) {
     const el = termLine('tl-option');
     const cursor = document.createElement('span');

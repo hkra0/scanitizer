@@ -12,7 +12,15 @@ export const pdfjsLib = window.pdfjsLib;
 export const PDFLib = window.PDFLib;
 export const JSZip = window.JSZip;
 
-export const { PDFDocument, PDFName } = PDFLib || {};
+export const {
+    PDFDocument,
+    PDFName,
+    PDFNumber,
+    PDFString,
+    PDFHexString,
+    PDFOperator,
+    PDFOperatorNames,
+} = PDFLib || {};
 
 /**
  * The worker is the one dependency pdf.js fetches itself, so it can't carry an

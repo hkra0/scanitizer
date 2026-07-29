@@ -76,8 +76,11 @@ export const SETTINGS = [
         })),
     },
     {
+        // Named after the encoder's own knob, so the note carries what moving
+        // it actually does to the file that comes out
         id: 'quality',
         label: t.setQuality,
+        note: t.setQualityNote,
         def: String(JPEG_QUALITY),
         values: [0.5, JPEG_QUALITY, 0.85, 0.95].map((q) => ({
             id: String(q),
@@ -90,6 +93,7 @@ export const SETTINGS = [
         // detail and costs proportionally more bytes.
         id: 'imageSize',
         label: t.setImageSize,
+        note: t.setImageSizeNote,
         def: String(MAX_PIXEL_HEIGHT),
         values: [
             [1240, 1754],

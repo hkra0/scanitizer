@@ -41,23 +41,6 @@ const ANGLE = ['< ', ' >'];
 let tinyko = null;    // the big tinyko line, created during boot
 let mood = 'idle';
 
-// The text-layer row on the done screen, kept so its state can be updated
-// in place; null whenever the current screen doesn't show it
-let keepTextLine = null;
-
-/**
- * Repaint the text-layer row only. `busy` parks it on an ellipsis while the
- * PDF is being rebuilt, which is the whole point of updating in place: the
- * rest of the screen stays put instead of being cleared and replayed.
- */
-export function setKeepTextState(on, busy = false) {
-    setToggleState(keepTextLine, {
-        label: busy ? t.busy : (on ? t.on : t.off),
-        cls: on && !busy ? 'tl-ok' : 'tl-dim',
-        wrap: ANGLE,
-    });
-}
-
 // tinyko and the document title always move together
 export function setMood(next) {
     if (next) mood = next;
@@ -145,7 +128,6 @@ export async function boot() {
 // Shown when the libraries are still in flight after the header is up: the app
 // isn't usable yet, so no file option is offered
 export function renderLoading() {
-    keepTextLine = null;
     settingsToggle = null;
     return renderLines([
         () => termText(t.loadingLibs, 'tl-dim'),
@@ -157,7 +139,6 @@ export function renderLoading() {
 // Dead end: without pdf.js and pdf-lib there is nothing the app can do, so it
 // says so and offers a reload rather than a start screen that can't start
 export function renderUnavailable({ retry }) {
-    keepTextLine = null;
     settingsToggle = null;
     return renderLines([
         () => termText('! ' + t.libsUnavailable, 'tl-warn'),
@@ -200,12 +181,12 @@ function fillSettings(box) {
             paint(cycle(setting, delta));
         }, box);
         paint(currentValue(setting));
+        if (setting.note) termText(setting.note, 'tl-dim tl-note', box);
     }
     termText(t.settingsHint, 'tl-dim tl-sub', box);
 }
 
 export function renderInit({ selectFile }) {
-    keepTextLine = null;
     let header = null;
     let box = null;
 
@@ -250,8 +231,7 @@ export function renderInit({ selectFile }) {
 /**
  * @param directDownload  true when only metadata was stripped, so the PDF is
  *                        the single possible output
- * @param actions         { onStart, setDoneMode, canKeepText, keepText,
- *                          toggleKeepText, downloadPdf, downloadImages,
+ * @param actions         { onStart, setDoneMode, downloadPdf, downloadImages,
  *                          downloadZip, changeSettings, reset }
  */
 export async function renderDone(directDownload, pageCount, actions) {
@@ -262,7 +242,6 @@ export async function renderDone(directDownload, pageCount, actions) {
     }
     termStopSpinner();
     actions.onStart();
-    keepTextLine = null;
     settingsToggle = null;
 
     setAccent('var(--text)');
@@ -290,24 +269,6 @@ export async function renderDone(directDownload, pageCount, actions) {
         () => termOption('1', t.formatPdf, actions.downloadPdf),
         () => termOption('2', t.formatImages, actions.downloadImages),
         () => termOption('3', t.formatZip, actions.downloadZip),
-        // Off by default: the recovered text comes straight from the source
-        // and, unlike the images, has not been through the cleanup
-        ...(actions.canKeepText ? [
-            () => termGap(),
-            () => termText(t.optionHeader),
-            () => {
-                // Two values, stepped like every other one — either arrow
-                // lands on the other state
-                keepTextLine = termChoice(
-                    't',
-                    t.keepText,
-                    { label: actions.keepText ? t.on : t.off, wrap: ANGLE },
-                    actions.toggleKeepText
-                );
-                setKeepTextState(actions.keepText);
-            },
-            () => termText(t.keepTextNote, 'tl-dim tl-sub'),
-        ] : []),
         () => termGap(),
         () => termOption('s', t.changeSettings, actions.changeSettings),
         () => termOption('0', t.reset, actions.reset),

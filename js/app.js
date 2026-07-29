@@ -7,7 +7,6 @@ import { pdfjsLib, PDFDocument, vendorReady, vendorState, canRaster } from './ve
 import { onSchemeChange } from './theme.js';
 import { extractImages } from './pdf/extract.js';
 import { createNewPdf, cleanSavePdf } from './pdf/build.js';
-import { hasTextLayer } from './pdf/textlayer.js';
 import { processImageFiles } from './images.js';
 import {
     saveUrl,
@@ -22,7 +21,6 @@ import {
     renderUnavailable,
     renderDone,
     setMood,
-    setKeepTextState,
     toggleSettings,
     openSettings,
 } from './screens.js';
@@ -52,7 +50,6 @@ const state = {
     pdfName: null,
     images: null,       // page images, when the source was a scan
     pageCount: 0,
-    keepText: false,    // re-draw the source text on top of the page images
 };
 
 // === Screen helpers ===
@@ -75,11 +72,6 @@ function showDone(directDownload) {
     renderDone(directDownload, state.pageCount, {
         onStart: () => { state.stage = 'done'; },
         setDoneMode: (mode) => { state.doneMode = mode; },
-        // The text option is only meaningful when the source actually carried
-        // text; image inputs and text-free scans never see it
-        canKeepText: hasTextLayer(state.images),
-        keepText: state.keepText,
-        toggleKeepText,
         downloadPdf,
         downloadImages: downloadAsImages,
         downloadZip: downloadAsZip,
@@ -113,7 +105,6 @@ function reset() {
     state.pdfName = null;
     state.pageCount = 0;
     state.doneMode = null;
-    state.keepText = false;
     setAccent('var(--accent)');
     setMood('idle');
     showInit();
@@ -136,34 +127,6 @@ async function downloadAsImages() {
         (current, total) => termUpdateProgress(t.downloading, current, total)
     );
     showDone(false);
-}
-
-// Flip the text-layer option and rebuild. Rebuilding is cheap next to the
-// original extraction — the page images are already encoded, so this only
-// re-embeds them — so it runs without taking over the screen: the done screen
-// stays exactly as it is and only the toggle's own state box moves. The old
-// PDF stays downloadable throughout, and is what a failed rebuild falls back
-// to, so there is nothing to abort to.
-let rebuilding = false;
-
-async function toggleKeepText() {
-    if (!state.images || rebuilding) return;
-    const next = !state.keepText;
-    rebuilding = true;
-    setKeepTextState(state.keepText, true);
-    try {
-        const newPdf = await createNewPdf(state.images, null, { keepText: next });
-        const blob = await cleanSavePdf(newPdf);
-        releasePdfUrl();
-        state.pdfUrl = URL.createObjectURL(blob);
-        state.keepText = next;
-    } catch (err) {
-        console.error('PDF rebuild failed:', err);
-        termWarn(t.failed);
-    } finally {
-        rebuilding = false;
-        setKeepTextState(state.keepText);
-    }
 }
 
 async function downloadAsZip() {
@@ -343,8 +306,6 @@ installKeyboard({
     getDoneMode: () => state.doneMode,
     selectFile: () => fileInput.click(),
     retry: () => location.reload(),
-    canKeepText: () => hasTextLayer(state.images),
-    toggleKeepText,
     toggleSettings,
     changeSettings,
     downloadPdf,

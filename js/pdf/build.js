@@ -2,7 +2,7 @@
 
 import { PDFDocument, PDFName } from '../vendor.js';
 import { drawTextLayer, finalizeTextLayer } from './textlayer.js';
-import { pageLayout } from '../settings.js';
+import { pageLayout, keepText } from '../settings.js';
 import { PORTRAIT_HEIGHT, METADATA_FIELDS } from '../config.js';
 
 /**
@@ -34,12 +34,15 @@ function sheetFor(imgWidth, imgHeight, { paper, orientation, margin }) {
  *
  * @param extractedImages  [{ page, blob, width, height, texts }]
  * @param onProgress       (current, total) => void
- * @param keepText         when true, the source text items travel with the
- *                         image and are re-drawn invisibly on top of it
+ *
+ * With the text-layer setting on, the source text items travel with the image
+ * and are re-drawn invisibly on top of it. Pages that carried no text simply
+ * contribute nothing.
  */
-export async function createNewPdf(extractedImages, onProgress, { keepText = false } = {}) {
+export async function createNewPdf(extractedImages, onProgress) {
     const pdfDoc = await PDFDocument.create();
     const layout = pageLayout();
+    const withText = keepText();
     const margin = layout.margin;
     extractedImages.sort((a, b) => a.page - b.page);
 
@@ -67,11 +70,11 @@ export async function createNewPdf(extractedImages, onProgress, { keepText = fal
         page.drawImage(pdfImage, { x, y, width: scaledWidth, height: scaledHeight });
 
         // The image's placement, as the matrix the text items are relative to
-        if (keepText) {
+        if (withText) {
             drawTextLayer(pdfDoc, page, img.texts, [scaledWidth, 0, 0, scaledHeight, x, y]);
         }
     }
-    if (keepText) finalizeTextLayer(pdfDoc);
+    if (withText) finalizeTextLayer(pdfDoc);
     return pdfDoc;
 }
 

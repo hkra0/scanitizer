@@ -234,8 +234,3 @@ export function finalizeTextLayer(pdfDoc) {
 
     registries.delete(pdfDoc);
 }
-
-// Whether a set of page images carries anything worth offering the option for
-export function hasTextLayer(images) {
-    return Array.isArray(images) && images.some((img) => img.texts?.length > 0);
-}

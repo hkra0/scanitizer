@@ -153,6 +153,12 @@ body:not(.key-nav) .tl-option:hover .tl-cursor {
     padding-left: 2ch;
 }
 
+/* A note under a setting row. Option rows carry a 2ch cursor cell of their
+   own, so the note needs that much again to sit under the label. */
+.tl-note {
+    padding-left: 4ch;
+}
+
 .tl-bar {
     color: var(--text-dim);
 }

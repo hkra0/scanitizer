@@ -1,4 +1,4 @@
-// User settings: page geometry and image compression.
+// User settings: text layer, page geometry and image compression.
 //
 // Every setting is a short list of values the user cycles through with the
 // left/right arrows, so a plain on/off option is just a two-value list and
@@ -25,9 +25,22 @@ const STORAGE_KEY = 'scanitizer.settings';
  * The settings panel, in display order.
  *
  * `def` names the value a fresh install starts on; `value` is the payload the
- * rest of the app consumes, and `label` is what the terminal prints.
+ * rest of the app consumes, `label` is what the terminal prints, and the
+ * optional `note` is a caveat printed under the row.
  */
 export const SETTINGS = [
+    {
+        // Off by default: the recovered text comes straight from the source
+        // and, unlike the images, has not been through the cleanup
+        id: 'keepText',
+        label: t.keepText,
+        note: t.keepTextNote,
+        def: 'off',
+        values: [
+            { id: 'off', label: t.off, value: false },
+            { id: 'on', label: t.on, value: true },
+        ],
+    },
     {
         id: 'paper',
         label: t.setPaper,
@@ -144,6 +157,11 @@ export function pageLayout() {
         orientation: valueOf('orientation'),
         margin: valueOf('margin'),
     };
+}
+
+/** Whether the source text should be re-drawn on top of the page images. */
+export function keepText() {
+    return valueOf('keepText');
 }
 
 export function rasterLimits() {

@@ -3,6 +3,7 @@
 
 import { t } from './i18n.js';
 import { getTool } from './theme.js';
+import { renderTinyko } from './tinyko.js';
 import { REPO_URL, TERM_DELAY } from './config.js';
 import { LOGO, LOGO_C, LOGO_C_END } from './logo.js';
 import { DEPENDENCIES } from './vendor.js';
@@ -29,7 +30,7 @@ import {
     setPendingFinish,
 } from './terminal.js';
 
-const FACES = {
+const TINYKO = {
     idle: '(๑- . -๑)',
     done: '(๑• . •๑)',
 };
@@ -37,7 +38,7 @@ const FACES = {
 // Value rows read as ‹ value ›, so it's clear the arrows step through a list
 const ANGLE = ['< ', ' >'];
 
-let face = null;      // the big mascot line, created during boot
+let tinyko = null;    // the big tinyko line, created during boot
 let mood = 'idle';
 
 // The text-layer row on the done screen, kept so its state can be updated
@@ -57,12 +58,20 @@ export function setKeepTextState(on, busy = false) {
     });
 }
 
-// Face and document title always move together
+// tinyko and the document title always move together
 export function setMood(next) {
     if (next) mood = next;
-    const text = getTool() + FACES[mood];
-    if (face) face.textContent = text;
+    const text = getTool() + TINYKO[mood];
+    if (tinyko) drawTinyko(tinyko, text);
     document.title = text;
+}
+
+// The canvas carries no text of its own, so the line is also kept as a label
+// for anything reading the page rather than looking at it
+function drawTinyko(canvas, text) {
+    const style = getComputedStyle(canvas);
+    renderTinyko(canvas, text, style.fontFamily, style.color);
+    canvas.setAttribute('aria-label', text);
 }
 
 // === Boot ===
@@ -85,8 +94,12 @@ export async function boot() {
     }
     termGap(header);
 
-    // Face
-    face = termText(getTool() + FACES.idle, 'tl-face', header);
+    // tinyko
+    tinyko = document.createElement('canvas');
+    tinyko.className = 'tl-tinyko';
+    tinyko.setAttribute('role', 'img');
+    termLine('tl-tinyko-line', header).appendChild(tinyko);
+    drawTinyko(tinyko, getTool() + TINYKO.idle);
     await delay(TERM_DELAY);
 
     // Description + tagline + github

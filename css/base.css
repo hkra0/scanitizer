@@ -9,6 +9,10 @@
     --accent: #2a6fb7;
     --warn: #d35400;
     --ok: #3d8b4a;
+    /* The pixel the rest of the interface is drawn on. Same size as the
+       tinyko's blow-up factor, so the rules, the gaps and the kaomoji's
+       blocks are all the same square. */
+    --px: 3px;
 }
 
 @media (prefers-color-scheme: dark) {

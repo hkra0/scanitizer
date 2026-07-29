@@ -25,8 +25,9 @@ js/
   settings.js       the user-adjustable options, persisted in localStorage
   vendor.js         the CDN globals (pdf.js, pdf-lib, JSZip) in one place
   i18n.js           UI strings + language detection
-  theme.js          colour-scheme-dependent mascot tool
+  theme.js          colour-scheme-dependent tinyko tool
   logo.js           half-block bitmap wordmark
+  tinyko.js         tinyko, the mascot, drawn through a pixel filter
   terminal.js       all DOM writes: lines, spinner, progress, warnings, menu
   screens.js        what the terminal shows at each stage
   keyboard.js       keyboard shortcuts and option navigation

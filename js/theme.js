@@ -1,4 +1,4 @@
-// The mascot's tool follows the colour scheme: scissors in light, knife in dark.
+// tinyko's tool follows the colour scheme: scissors in light, knife in dark.
 
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)');
 

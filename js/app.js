@@ -353,7 +353,7 @@ installKeyboard({
     reset,
 });
 
-// The mascot's tool follows the colour scheme, so redraw the face on a switch
+// tinyko's tool follows the colour scheme, so redraw it on a switch
 onSchemeChange(() => setMood());
 
 // The header goes up first, then the start screen — but only once the

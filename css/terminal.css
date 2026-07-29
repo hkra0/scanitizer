@@ -108,6 +108,21 @@
     user-select: none;
 }
 
+/* The rows are real focus stops, so Tab has to be visible. The ring is drawn
+   outside the row rather than around the text, so it lines up with the grid
+   instead of hugging a proportional-looking box, and `outline` is used rather
+   than a border so nothing reflows when it appears. */
+.tl-option:focus-visible {
+    outline: var(--px) solid var(--accent);
+    outline-offset: 0;
+}
+
+/* Focus without focus-visible is a click, and a click already has the hover
+   highlight — a second marker on the same row would be two cursors */
+.tl-option:focus:not(:focus-visible) {
+    outline: none;
+}
+
 .tl-option .tl-key {
     color: var(--text-dim);
 }
@@ -159,8 +174,56 @@ body:not(.key-nav) .tl-option:hover .tl-cursor {
     padding-left: 4ch;
 }
 
+/* A typed-into line. The input is stripped back to nothing so it inherits the
+   cell — same font, same size, same colour — and the row it sits on is a
+   terminal line like any other. The label is dim and the answer is not, which
+   is the same contrast the option rows use for key and action. */
+.tl-input-line {
+    display: flex;
+}
+
+.tl-input-label {
+    display: flex;
+    flex: 1;
+    color: var(--text-dim);
+    cursor: text;
+}
+
+.tl-input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    line-height: inherit;
+    color: var(--text);
+    background: none;
+    border: 0;
+    padding: 0;
+    /* The block caret the rest of the terminal draws, done by the browser */
+    caret-color: var(--accent);
+}
+
+/* The field is the one thing on this screen; a ring around it would be
+   restating where the cursor already is */
+.tl-input:focus {
+    outline: none;
+}
+
+/* Masked characters are laid out by the font, not the grid, so they are given
+   the cell's width back — otherwise the dots bunch up mid-line */
+.tl-input[type="password"] {
+    letter-spacing: 0.1em;
+}
+
 .tl-bar {
     color: var(--text-dim);
+}
+
+/* A file is over the window. The border is the only thing that changes — the
+   contents stay put, so nothing has to be redrawn when the drag passes over
+   and nothing shifts under a pointer that is holding something. */
+body.dragging .term-win {
+    border-color: var(--accent);
+    border-style: dashed;
 }
 
 .caret {

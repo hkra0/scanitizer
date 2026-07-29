@@ -15,7 +15,29 @@ import { rasterize } from '../raster.js';
 import { multiplyMatrices, invertMatrix, paintedSize } from './matrix.js';
 
 const RENDER_SCALE = 1.5;
-const MIN_PAINTED_SIZE = 500;   // ignore decorations, logos and stamps
+
+/**
+ * How much of the page an image must cover to be a candidate for being the
+ * scan of it. Measured against the page box rather than in absolute units, so
+ * the same rule holds for A6 and for A0 — an absolute threshold silently means
+ * something different on every paper size.
+ *
+ * Calibrated against a real scan: a CamScanner page paints its scan across
+ * 0.87 of the page and its watermark across 0.006 — two orders of magnitude
+ * apart, so the exact figure between them matters little. It is set low rather
+ * than close to the measured 0.87 because the risk is asymmetric: too high
+ * drops a page with generous margins entirely, too low only lets a large
+ * decoration compete, where the rules below then rank it.
+ */
+const MIN_PAGE_COVERAGE = 0.5;
+
+/**
+ * Below this, an image is being stretched far past its own resolution — a
+ * small graphic blown up to page size, which is a background or a watermark
+ * and not a scan. Even a poor fax is above it, so it demotes rather than
+ * disqualifies (see pickPageImage).
+ */
+const MIN_PLAUSIBLE_DPI = 50;
 // How far outside the image a text item's origin may sit and still count as
 // belonging to it — glyphs on the very edge of a scan routinely land a hair
 // outside the painted box.
@@ -55,11 +77,19 @@ function collectPaintedImages(ops) {
                     currentMatrix: multiplyMatrices(currentMatrix, args)
                 };
 
+            // args are [objId, width, height], where the size is the image's
+            // own pixel dimensions — the CTM says how large it is painted, and
+            // the two together are its effective resolution
             case pdfjsLib.OPS.paintImageXObject:
             case pdfjsLib.OPS.paintJpegXObject:
                 return {
                     ...state,
-                    images: [...images, { imageName: args[0], matrix: [...currentMatrix] }]
+                    images: [...images, {
+                        imageName: args[0],
+                        sourceWidth: args[1],
+                        sourceHeight: args[2],
+                        matrix: [...currentMatrix],
+                    }]
                 };
 
             default:
@@ -68,17 +98,71 @@ function collectPaintedImages(ops) {
     }, initialState).images;
 }
 
-// The page-sized image, if this page has one: biggest painted area wins.
-// Decorations, logos and stamps are filtered out by size, pdf.js-generated
-// masks by their 'g_' name prefix.
-function pickPageImage(rawImages) {
+/**
+ * Whether pdf.js has promoted an image to the document-wide store.
+ *
+ * The prefix is pdf.js's own, and it means one specific thing: the same image
+ * object has now been painted by at least two different pages
+ * (`GlobalImageCache.NUM_PAGES_THRESHOLD`). That is what a watermark, a
+ * letterhead or a stamp does, and what the scan of a page does not.
+ *
+ * It also says which store the pixels are in — pdf.js dispatches on the same
+ * test — so nothing may look at the name without honouring both meanings.
+ */
+function isShared(imageName) {
+    return imageName.startsWith('g_');
+}
+
+/**
+ * The page-sized image, if this page has one.
+ *
+ * Only one thing disqualifies a candidate outright: not covering enough of the
+ * page to be a scan of it. Everything else ranks, and ranking never empties the
+ * list — a page that has any candidate at all keeps one. That asymmetry is
+ * deliberate. Picking the wrong image on a page yields a wrong page; picking
+ * none drops the page, and enough dropped pages make the whole document read
+ * as non-scanned and go through with only its metadata touched. The second
+ * failure is far worse and much quieter, so nothing but coverage gets a veto.
+ *
+ * The order, strongest first:
+ *
+ *   1. not shared with other pages, over shared. pdf.js promotes an image to
+ *      the document-wide store once a second page paints it, which is what a
+ *      watermark, a letterhead or a stamp does and a page's own scan does not.
+ *      A page carrying its own scan therefore always has a page-scoped
+ *      candidate, and no watermark can outrank it however large it is painted.
+ *   2. plausible resolution, over stretched. A graphic blown up far past its
+ *      own pixel count is a background, not a scan.
+ *   3. larger coverage.
+ *
+ * Two leaks are left, both narrow and both preferred to the alternative:
+ *
+ *   - an image looks page-scoped on the first page that paints it, since
+ *     pdf.js promotes it only on the second, so rule 1 does not see a
+ *     watermark there. Rules 2 and 3 still apply, and closing it properly
+ *     needs identity across pages that the per-page object ids cannot give.
+ *   - a watermark that is small, sharp and page-scoped passes every rule; it
+ *     is stopped by coverage instead, which is what the measured CamScanner
+ *     stamp (0.006 of the page) runs into.
+ */
+function pickPageImage(rawImages, pageArea) {
     let best = null;
-    for (const { imageName, matrix } of rawImages) {
-        if (imageName.startsWith('g_')) continue;
+    for (const { imageName, sourceWidth, matrix } of rawImages) {
         const { width, height } = paintedSize(matrix);
-        if (width < MIN_PAINTED_SIZE && height < MIN_PAINTED_SIZE) continue;
-        const area = width * height;
-        if (!best || area > best.area) best = { imageName, area, matrix };
+        const coverage = pageArea > 0 ? (width * height) / pageArea : 0;
+        if (coverage < MIN_PAGE_COVERAGE) continue;
+
+        const shared = isShared(imageName);
+        // Pixels across, over inches across. Absent dimensions leave it
+        // unjudged rather than guessed at.
+        const dpi = width > 0 && sourceWidth > 0 ? sourceWidth / (width / 72) : 0;
+        const stretched = dpi > 0 && dpi < MIN_PLAUSIBLE_DPI;
+
+        const better = !best ||
+            (best.shared !== shared ? best.shared :
+                best.stretched !== stretched ? best.stretched :
+                    coverage > best.coverage);
+        if (better) best = { imageName, matrix, shared, stretched, coverage };
     }
     return best;
 }
@@ -177,10 +261,56 @@ export async function extractImages(pdf, { onProgress } = {}) {
             ? [outputScale, 0, 0, outputScale, 0, 0]
             : null;
 
-        // Rendering populates page.objs, which is where the bitmaps come from
-        await page.render({ canvasContext: context, transform, viewport }).promise;
+        // Rendering populates page.objs, which is where the bitmaps come from.
+        //
+        // `intent: 'print'` is not about printing — it is what keeps this off
+        // requestAnimationFrame. pdf.js drives a display render one chunk per
+        // animation frame, and a browser stops delivering those to a tab that
+        // isn't visible, so a run left in a background tab stops here and never
+        // resumes: no error, no progress, just the spinner. Print intent
+        // schedules the same work on microtasks instead and finishes wherever
+        // the tab is. Nothing is being painted for a viewer anyway — the canvas
+        // is a scratch surface and the pixels are read out of the object stores
+        // afterwards — so this is also the intent that describes what the
+        // render is for.
+        // Annotations are dropped rather than drawn. A large share of stamped
+        // watermarks are Watermark or Stamp *annotations* sitting on top of the
+        // page rather than content inside it, and turning them off removes that
+        // whole class outright instead of ranking around it. A scanner does not
+        // put the scan in an annotation, so there is nothing here to lose.
+        //
+        // Both calls have to agree. `getOperatorList` enables annotations by
+        // default, and a list that names images the render never decoded would
+        // send the lookup below after pixels that do not exist — costing the
+        // page, since a failed fetch counts it as non-scanned.
+        const annotationMode = pdfjsLib.AnnotationMode.DISABLE;
 
-        const candidate = pickPageImage(collectPaintedImages(await page.getOperatorList()));
+        // Rendering populates page.objs, which is where the bitmaps come from.
+        //
+        // `intent: 'print'` is not about printing — it is what keeps this off
+        // requestAnimationFrame. pdf.js drives a display render one chunk per
+        // animation frame, and a browser stops delivering those to a tab that
+        // isn't visible, so a run left in a background tab stops here and never
+        // resumes: no error, no progress, just the spinner. Print intent
+        // schedules the same work on microtasks instead and finishes wherever
+        // the tab is. Nothing is being painted for a viewer anyway — the canvas
+        // is a scratch surface and the pixels are read out of the object stores
+        // afterwards — so this is also the intent that describes what the
+        // render is for.
+        await page.render({
+            canvasContext: context, transform, viewport,
+            intent: 'print', annotationMode,
+        }).promise;
+
+        // The page box, as the area every candidate's coverage is measured
+        // against — `view` is the box pdf.js lays the page out in
+        const [boxX0, boxY0, boxX1, boxY1] = page.view;
+        const pageArea = Math.abs((boxX1 - boxX0) * (boxY1 - boxY0));
+
+        const candidate = pickPageImage(
+            collectPaintedImages(await page.getOperatorList({ annotationMode })),
+            pageArea
+        );
 
         const textContent = await page.getTextContent();
 
@@ -188,7 +318,10 @@ export async function extractImages(pdf, { onProgress } = {}) {
         let pageImage = null;
         if (candidate) {
             try {
-                const image = await page.objs.get(candidate.imageName);
+                // A shared image's pixels live in the document-wide store, not
+                // this page's — the same dispatch pdf.js makes on the prefix
+                const store = candidate.shared ? page.commonObjs : page.objs;
+                const image = await store.get(candidate.imageName);
                 const { blob, width, height } = await rasterize(image.bitmap);
                 pageImage = {
                     page: curPage,

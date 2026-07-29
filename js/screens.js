@@ -14,6 +14,11 @@ import {
     openTermContent,
     termLine,
     termText,
+    termStatus,
+    termInput,
+    termClear,
+    termInvalidate,
+    termStartProgress,
     termGap,
     termRule,
     termBlock,
@@ -141,7 +146,7 @@ export function renderLoading() {
 export function renderUnavailable({ retry }) {
     settingsToggle = null;
     return renderLines([
-        () => termText('! ' + t.libsUnavailable, 'tl-warn'),
+        () => termStatus('! ' + t.libsUnavailable, 'tl-warn'),
         () => termGap(),
         () => termOption('r', t.retry, retry),
         () => termGap(),
@@ -186,12 +191,35 @@ function fillSettings(box) {
     termText(t.settingsHint, 'tl-dim tl-sub', box);
 }
 
-export function renderInit({ selectFile }) {
+// A file name long enough to fight the label for the row is cut from the
+// front — the tail carries the extension and the telling part of the name
+function shortName(name, max = 28) {
+    return name.length > max ? '…' + name.slice(-(max - 1)) : name;
+}
+
+/**
+ * The screen a run is started from, and the one a failed run comes back to.
+ *
+ * @param fileLabel  name of the file still in the picker, when there is one:
+ *                   the way back from the output screen keeps the selection,
+ *                   so the same file can be run again under new settings
+ * @param error      why the last run ended, when it ended badly. Printed as
+ *                   part of the screen rather than as a warning, because a
+ *                   warning expires after two seconds and the reason for a
+ *                   failure is what the next attempt is decided on. The file
+ *                   is still in the picker, so "change a setting and run it
+ *                   again" is one keypress from here.
+ */
+export function renderInit({ selectFile, proceed, fileLabel, error }) {
     let header = null;
     let box = null;
 
-    const paintHeader = () =>
+    // The header's box is a fold marker, not a value, so it is announced as an
+    // expanded/collapsed state rather than read out as "settings: +"
+    const paintHeader = () => {
         setToggleState(header, { label: settingsOpen ? '-' : '+', cls: 'tl-dim' });
+        header.setAttribute('aria-expanded', String(settingsOpen));
+    };
 
     // Folding is a local edit: only the panel's own rows come and go, so the
     // screen around them is never cleared and replayed
@@ -208,13 +236,30 @@ export function renderInit({ selectFile }) {
     settingsToggle = () => fold(!settingsOpen);
 
     return renderLines([
-        () => termText(t.ready, 'tl-dim'),
+        () => {
+            if (error) {
+                termStatus('! ' + error, 'tl-warn');
+                termGap();
+            }
+            termText(t.ready, 'tl-dim');
+        },
         () => termGap(),
-        () => termOption('enter', t.selectFile, selectFile),
+        () => {
+            if (!fileLabel) {
+                termOption('enter', t.selectFile, selectFile);
+                termText(t.dropHint, 'tl-dim tl-sub');
+                return;
+            }
+            const row = termOption('enter', t.proceed, proceed);
+            row.classList.add('tl-row');
+            setToggleState(row, { label: shortName(fileLabel), cls: 'tl-dim', wrap: ['', ''] });
+            termOption('f', t.changeFile, selectFile);
+        },
         () => termGap(),
         () => {
             header = termOption('s', t.settings, settingsToggle);
             header.classList.add('tl-row');
+            header._ariaBase = null;   // named by its own text, not by the marker
             paintHeader();
             // The arrows open and shut it, the same keys that change a value
             setAdjust(header, (delta) => fold(delta > 0));
@@ -226,6 +271,70 @@ export function renderInit({ selectFile }) {
         () => termGap(),
         () => termCaret(),
     ]);
+}
+
+/**
+ * The screen an encrypted PDF stops on.
+ *
+ * Printed at once and not a line at a time: it is an answer to something the
+ * file asked, and a field that fades in under a cursor already in it is a field
+ * that swallows the first characters typed. For the same reason it does not go
+ * through `renderLines` — there is nothing to animate and nothing to supersede.
+ *
+ * @param retry     the last attempt was wrong, rather than this being the first
+ * @param onSubmit  (password) => void
+ * @param onCancel  giving up; the run is abandoned and the reason said out loud
+ */
+export function renderPassword({ fileLabel, retry, onSubmit, onCancel }) {
+    settingsToggle = null;
+    termInvalidate();
+    termClear();
+    termStopSpinner();
+
+    if (fileLabel) {
+        termText('> ' + shortName(fileLabel), 'tl-dim');
+        termGap();
+    }
+    // A wrong password is worth announcing; the plain locked notice is not,
+    // since the field it belongs to is the thing being focused anyway
+    if (retry) termStatus('! ' + t.incorrectPassword, 'tl-warn');
+    termText(t.locked, 'tl-dim');
+    termGap();
+
+    const input = termInput(t.passwordPrompt + ': ', { type: 'password', onSubmit });
+
+    // Revealing what was typed is the cheapest fix for the commonest failure —
+    // a mistyped password no one can see. Keyless: the field has the focus and
+    // every letter belongs to it, so there is no shortcut to spare.
+    const reveal = termOption(null, t.showPassword, () => {
+        const shown = input.type === 'text';
+        input.type = shown ? 'password' : 'text';
+        reveal.lastChild.textContent = shown ? t.showPassword : t.hidePassword;
+        input.focus();
+    });
+
+    termGap();
+    termOption('esc', t.cancel, onCancel);
+    termGap();
+
+    input.focus();
+}
+
+/**
+ * The screen a run occupies while it works. Printed at once — a progress line
+ * that fades in a row at a time is a progress line that is already out of date.
+ *
+ * @param header    the file, or the first of several, shown above the bar
+ * @param onCancel  a run can be long and there is no other way out of it than
+ *                  reloading the page, so the way out is named on screen
+ */
+export function renderProgress({ text, header, onCancel }) {
+    settingsToggle = null;
+    termStartProgress(text, header);
+    if (onCancel) {
+        termGap();
+        termOption('esc', t.cancel, onCancel);
+    }
 }
 
 /**
@@ -252,7 +361,7 @@ export async function renderDone(directDownload, pageCount, actions) {
         : `✓ ${pageCount} ${t.pagesReady}`;
 
     const lines = directDownload ? [
-        () => termText(summary, 'tl-ok'),
+        () => termStatus(summary, 'tl-ok'),
         () => termGap(),
         () => { actions.setDoneMode('direct'); termOption('enter', t.download, actions.downloadPdf); },
         () => termGap(),
@@ -261,7 +370,7 @@ export async function renderDone(directDownload, pageCount, actions) {
         () => termGap(),
         () => termCaret(),
     ] : [
-        () => termText(summary, 'tl-ok'),
+        () => termStatus(summary, 'tl-ok'),
         () => termGap(),
         // Each option downloads on the spot, so the header names the action;
         // the options themselves say which format it lands in

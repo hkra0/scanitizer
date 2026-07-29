@@ -11,6 +11,16 @@ Notes:
 - For non-scanned PDF, only metadata is removed.
 - Paper size, orientation, page margin and image compression are adjustable
   under `[s]` on the start screen. See [Settings](#settings).
+- A file can be dropped anywhere on the page instead of picked.
+- An encrypted PDF asks for its password on a screen of its own, in the
+  terminal, with the answer maskable and revealable. The password is handed
+  straight to pdf.js and kept nowhere else.
+- `[esc]` abandons a run in progress. A run that ends badly — or is abandoned —
+  goes back to the start screen with the reason printed on it and the file still
+  selected, so `[s]` is a retry under different settings rather than a re-pick.
+- Every option is a real focus stop: `Tab` reaches them, `Enter`/`Space`
+  activate them, and the arrow-key cursor moves the same focus a screen reader
+  follows.
 
 ## Project structure
 

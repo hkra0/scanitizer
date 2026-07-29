@@ -36,6 +36,8 @@ const langPack = {
         optFit: "fit image",
         on: "on",
         off: "off",
+        proceed: "proceed",
+        changeFile: "select another file",
         changeSettings: "change settings and start over",
         reset: "reset",
         tagline: "all local, nothing is uploaded",
@@ -47,11 +49,18 @@ const langPack = {
         loadingLibs: "loading libraries...",
         libsUnavailable: "libraries failed to load, check your connection",
         retry: "retry",
+        cancel: "cancel",
+        cancelled: "cancelled",
+        dropHint: "or drop a file here",
+        dropRejected: "that is not a PDF or an image",
+        locked: "this PDF is encrypted",
+        showPassword: "show password",
+        hidePassword: "hide password",
     },
     zh: {
         selectFile: "选择 PDF 或图片",
         noFile: "未选择文件",
-        passwordPrompt: "请输入 PDF 密码",
+        passwordPrompt: "PDF 密码",
         incorrectPassword: "密码错误，请重新输入",
         passwordNotProvided: "未提供密码",
         extracting: "提取",
@@ -83,6 +92,8 @@ const langPack = {
         optFit: "适应图像",
         on: "开",
         off: "关",
+        proceed: "继续",
+        changeFile: "重新选择文件",
         changeSettings: "更改设置并重新开始",
         reset: "重置",
         tagline: "全部本地处理，文件不会上传",
@@ -94,6 +105,13 @@ const langPack = {
         loadingLibs: "正在加载依赖库...",
         libsUnavailable: "依赖库加载失败，请检查网络连接",
         retry: "重试",
+        cancel: "取消",
+        cancelled: "已取消",
+        dropHint: "或将文件拖入页面中",
+        dropRejected: "拖入的不是 PDF 或图片",
+        locked: "此 PDF 已加密",
+        showPassword: "显示密码",
+        hidePassword: "隐藏密码",
     },
 };
 
@@ -105,3 +123,7 @@ function detectLang() {
 
 export const lang = detectLang();
 export const t = langPack[lang];
+
+// The markup ships with lang="en"; a screen reader picks its voice from this,
+// so it has to follow the pack that was actually chosen
+document.documentElement.lang = lang;

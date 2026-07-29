@@ -237,11 +237,27 @@ function collectTextItems(textContent, imageMatrix) {
 /**
  * @param pdf         a pdf.js document proxy
  * @param onProgress  (current, total) => void
+ * @param limit       stop after this many pages. The sample screen extracts
+ *                    one page to show what the settings do to it, and that is
+ *                    the same walk this makes, cut short — there is no second
+ *                    path for it to drift from. The non-scan verdict below is
+ *                    still measured against the *whole* document, so a bounded
+ *                    run reports what it found and never reaches a conclusion
+ *                    it has not read enough pages to draw.
+ * @param keepSource  hand back a copy of the winning bitmap as `source`, for a
+ *                    caller that is going to encode this page more than once.
+ *                    Everything above the encoder — the render, the operator
+ *                    list, the pick — gives the same answer whatever the
+ *                    compression settings say, and is the overwhelming majority
+ *                    of the cost; the bitmap is the one part of it that cannot
+ *                    be kept any other way, since pdf.js's own copy does not
+ *                    survive the `page.cleanup()` below. The caller owns what
+ *                    it asked for and has to close it.
  * @returns  an array of page images — each with a `texts` array holding the
  *           page's text items in image-normalized coordinates — or `false` if
  *           this is not a scanned PDF
  */
-export async function extractImages(pdf, { onProgress } = {}) {
+export async function extractImages(pdf, { onProgress, limit, keepSource } = {}) {
     const numPages = pdf.numPages;
     const extractedImages = [];
     let nonScannedCount = 0;  // pages with no page-sized image
@@ -249,9 +265,10 @@ export async function extractImages(pdf, { onProgress } = {}) {
     // Image-less pages tolerated before we call the whole document non-scanned:
     // a third of it, but never fewer than 3 pages and never more than it has
     const giveUpAfter = Math.min(Math.max(3, Math.round(numPages / 3)), numPages);
+    const lastPage = limit ? Math.min(limit, numPages) : numPages;
 
-    for (let curPage = 1; curPage <= numPages; curPage++) {
-        onProgress?.(curPage, numPages);
+    for (let curPage = 1; curPage <= lastPage; curPage++) {
+        onProgress?.(curPage, lastPage);
         const page = await pdf.getPage(curPage);
         const viewport = page.getViewport({ scale: RENDER_SCALE });
         const outputScale = window.devicePixelRatio || 1;
@@ -331,6 +348,9 @@ export async function extractImages(pdf, { onProgress } = {}) {
                     viewport,
                     texts: collectTextItems(textContent, candidate.matrix),
                 };
+                // A copy, not the bitmap itself: pdf.js is about to be told it
+                // can let go of the page, and what it lets go of includes this
+                if (keepSource) pageImage.source = await createImageBitmap(image.bitmap);
             } catch (err) {
                 console.warn(`Image extraction failed for ${candidate.imageName}:`, err);
             }

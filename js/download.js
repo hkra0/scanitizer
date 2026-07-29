@@ -40,7 +40,16 @@ export async function downloadImages(images, baseName, onProgress) {
     }
 }
 
-export async function downloadZip(images, baseName) {
+/**
+ * Every page in one archive.
+ *
+ * `onProgress` is handed straight to JSZip's own update callback, which is the
+ * only visibility there is into a step that used to be a bare spinner however
+ * long it took. It is also where a cancel gets noticed: the reporter throws
+ * from inside the callback, which rejects `generateAsync` — so the archive is
+ * abandoned mid-build rather than being finished and then thrown away.
+ */
+export async function downloadZip(images, baseName, onProgress) {
     // jszip is loaded in the background, and this is the only thing that needs
     // it — by the time a file has been processed it has long since arrived
     if (!(await jszipReady)) throw new Error('jszip unavailable');
@@ -48,6 +57,8 @@ export async function downloadZip(images, baseName) {
     images.forEach((img, i) => {
         zip.file(pageFileName(baseName, i), img.blob);
     });
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const zipBlob = await zip.generateAsync({ type: 'blob' }, (meta) => {
+        onProgress?.(Math.round(meta.percent), 100);
+    });
     saveBlob(zipBlob, `${baseName}_images.zip`);
 }

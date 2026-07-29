@@ -108,18 +108,13 @@
     user-select: none;
 }
 
-/* The rows are real focus stops, so Tab has to be visible. The ring is drawn
-   outside the row rather than around the text, so it lines up with the grid
-   instead of hugging a proportional-looking box, and `outline` is used rather
-   than a border so nothing reflows when it appears. */
-.tl-option:focus-visible {
-    outline: var(--px) solid var(--accent);
-    outline-offset: 0;
-}
-
-/* Focus without focus-visible is a click, and a click already has the hover
-   highlight — a second marker on the same row would be two cursors */
-.tl-option:focus:not(:focus-visible) {
+/* The rows are real focus stops, but the browser's ring is not how this
+   interface says "here". A focused row is already marked the way a hovered one
+   is — accent text and the `>` cursor lit, applied by `is-sel` — so the ring
+   would be a second, differently-shaped cursor on a row that already has one,
+   and the keyboard would look unlike the mouse for no reason. Focus stays
+   visible; it is drawn in the terminal's own vocabulary instead of the UA's. */
+.tl-option:focus {
     outline: none;
 }
 
@@ -141,8 +136,14 @@ body:not(.key-nav) .tl-option:hover {
     color: var(--accent);
 }
 
+/* The whole row lights, punctuation included. The key and the state box carry
+   their own colours — `tl-dim` on the fold marker and the file name — and a
+   colour set on a child is not inherited from the row, so both have to be told
+   again or the row highlights around a `[+]` that stays grey. */
 .tl-option.is-sel .tl-key,
-body:not(.key-nav) .tl-option:hover .tl-key {
+.tl-option.is-sel .tl-state,
+body:not(.key-nav) .tl-option:hover .tl-key,
+body:not(.key-nav) .tl-option:hover .tl-state {
     color: var(--accent);
 }
 
@@ -163,6 +164,14 @@ body:not(.key-nav) .tl-option:hover .tl-cursor {
     white-space: pre;
 }
 
+/* The two directions a stepped value can go. They sit in the run of characters
+   like the glyphs they are; what makes them targets is the hit area, not any
+   decoration of their own. */
+.tl-step {
+    display: inline-block;
+    cursor: pointer;
+}
+
 /* Rows that belong to the option above them */
 .tl-sub {
     padding-left: 2ch;
@@ -172,6 +181,108 @@ body:not(.key-nav) .tl-option:hover .tl-cursor {
    own, so the note needs that much again to sit under the label. */
 .tl-note {
     padding-left: 4ch;
+}
+
+/* The page figure: the sheet, and a 1:1 window into it in the space beside it.
+   Deliberately the one thing on screen that is not snapped to the grid — it is a
+   photograph of the user's document, and it is here to be judged rather than to
+   match the furniture. The two boxes are the same height, so the row reads as
+   one figure and not as two pictures that happen to be adjacent. */
+.tl-figure {
+    display: flex;
+    align-items: stretch;
+    gap: calc(var(--px) * 4);
+    min-height: 0;
+    margin: calc(var(--px) * 2) 0;
+    padding-left: 2ch;
+}
+
+/* The sheet. Its width is a whole number of grid pixels so it lines up with the
+   rules and the gaps; its proportions and its padding come from the two custom
+   properties the geometry is written into. The fallbacks are portrait A4 with no
+   margin, which is what an unset sheet should look like rather than a square. */
+.tl-page {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--thumb);
+    aspect-ratio: var(--page-aspect, 595 / 842);
+    padding: calc(var(--thumb) * var(--page-margin, 0));
+    border: 1px solid var(--border);
+    /* A scan is mostly white; on the dark theme the sheet needs its own ground
+       rather than bleeding into the terminal's */
+    background: #fff;
+    line-height: 0;
+}
+
+/* Exactly the picture's box inside the sheet's margins, which is what lets the
+   crop marker be positioned in per cent of the image rather than of the paper */
+.tl-page-frame {
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+    aspect-ratio: var(--img-aspect, 1);
+}
+
+.tl-page-frame[hidden] {
+    display: none;
+}
+
+.tl-page-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.tl-page-img[hidden] {
+    display: none;
+}
+
+/* Where the detail beside it was cut from. Outlined rather than tinted: a wash
+   over a scan hides the very ink the marker is pointing at. */
+.tl-crop-mark {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid var(--accent);
+    pointer-events: none;
+}
+
+.tl-crop-mark[hidden] {
+    display: none;
+}
+
+/* Read against the sheet's white, not the terminal's ground, so it takes a
+   colour of its own in both themes */
+.tl-page-note {
+    color: #767670;
+    line-height: 1.4;
+    text-align: center;
+}
+
+/* The 1:1 window. It takes whatever width the row leaves it and the sheet's
+   height, so a wider terminal shows more of the page rather than a bigger
+   picture of the same amount of it. `overflow: hidden` is load-bearing: the
+   canvas is sized from this box's own size, so it must never be able to push it
+   wider and set the resize observer chasing itself. */
+.tl-detail {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #fff;
+}
+
+.tl-detail[hidden] {
+    display: none;
+}
+
+.tl-detail-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
 }
 
 /* A typed-into line. The input is stripped back to nothing so it inherits the
@@ -249,5 +360,35 @@ body.dragging .term-win {
         padding: 13px 14px 16px;
         font-size: 12px;
         min-height: 336px;
+    }
+}
+
+/* Touch. Must come after the width query above, which a phone also matches.
+
+   The row is the target, and a 19px row is not one — WCAG 2.5.8 asks for 24 and
+   a finger would like more. Only the rows that are targets grow: widening the
+   cell itself was the tidier idea and the wrong one, because it stretches the
+   boot log and the setting notes too, and a screen of prose at target spacing
+   is a screen you have to scroll rather than read. Growing the options alone
+   also groups each setting with the note under it, which the even rhythm had
+   been working against. The text stays the size it was; the rows get the room. */
+@media (pointer: coarse) {
+    .tl-option {
+        min-height: 30px;
+        line-height: 30px;
+    }
+
+    /* The glyph is one character wide; the target has to be a finger wide. The
+       padding grows the hit area, the negative margin hands the space back to
+       the layout, so the row still reads as one unbroken run of characters. */
+    .tl-step {
+        padding: 0 calc(var(--px) * 3);
+        margin: 0 calc(var(--px) * -3);
+    }
+
+    /* Room for the left arrow's hit area to grow into the gap before the value
+       rather than into the end of the label */
+    .tl-row .tl-state {
+        padding-left: 3ch;
     }
 }

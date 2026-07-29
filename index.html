@@ -45,6 +45,15 @@
 <body>
     <input type="file" id="fileInput" accept=".pdf,image/*,.jpg,.jpeg,.png,.webp,.bmp" multiple
         style="display: none;" />
+
+    <!-- The wordmark is drawn out of half-block characters, which is a picture
+         of the name rather than the name: read aloud it is three rows of "▀▄█".
+         So the logo rows are hidden from assistive tech (js/screens.js) and the
+         name is carried here instead, as the heading the page never had. Static
+         markup rather than something the terminal prints, so it is in the
+         document before any script runs. -->
+    <h1 class="sr-only">scanitizer</h1>
+
     <div class="term-win">
         <div class="term-body">
             <div id="term"></div>

@@ -6,18 +6,33 @@ Everything runs in the browser — no build step, no bundler, no upload.
 
 Notes:
 
-- For scanned PDF with OCR text, the text is dropped by default; the output
-  screen offers `[t]` to keep it. See [Keeping the text layer](#keeping-the-text-layer).
+- For scanned PDF with OCR text, the text is dropped by default; `keep original
+  text layer` under `[s]` puts it back. See
+  [Keeping the text layer](#keeping-the-text-layer).
 - For non-scanned PDF, only metadata is removed.
-- Paper size, orientation, page margin and image compression are adjustable
-  under `[s]` on the start screen. See [Settings](#settings).
+- A file is processed one page first, not all of it: the sample screen shows
+  page 1 on the sheet it will land on, with the settings under it and an
+  estimate of what the whole file will weigh. `[enter]` runs the rest. See
+  [The sample screen](#the-sample-screen).
+- The output screen shows the first page and an account of the run — size
+  before and after, and which metadata fields the source was carrying. See
+  [The output screen](#the-output-screen).
+- Paper size, orientation, page margin and image compression are adjustable on
+  the sample screen, and under `[s]` on the start screen. See
+  [Settings](#settings).
 - A file can be dropped anywhere on the page instead of picked.
 - An encrypted PDF asks for its password on a screen of its own, in the
   terminal, with the answer maskable and revealable. The password is handed
   straight to pdf.js and kept nowhere else.
+- A run past its first couple of pages prints a time estimate beside the
+  percentage. A page count says how far along a run is; how long is left is what
+  "should I cancel this" actually turns on.
 - `[esc]` abandons a run in progress. A run that ends badly — or is abandoned —
   goes back to the start screen with the reason printed on it and the file still
-  selected, so `[s]` is a retry under different settings rather than a re-pick.
+  open, so `[enter]` returns to the sample screen without re-reading the file or
+  asking for its password again.
+  Nothing on screen expires on a timer: if the app has something to say about a
+  run, it says it on a screen and leaves it there.
 - Every option is a real focus stop: `Tab` reaches them, `Enter`/`Space`
   activate them, and the arrow-key cursor moves the same focus a screen reader
   follows.
@@ -60,10 +75,17 @@ UI directly.
 `[s]` on the start screen folds open a panel of page and compression options.
 Every row is a list of values stepped with `←`/`→`, so a plain on/off option is
 just a two-value list and works exactly like the rest — including the text-layer
-option on the output screen.
+option, which is why it lives here rather than being a switch of its own.
+
+The `‹` and `›` around a value are targets, not decoration: clicking or tapping
+one steps that way, and clicking the row steps forward. That last one used to be
+the only pointer gesture there was, which meant a value could only ever be
+cycled all the way round — on a touch screen, with no arrow keys to fall back
+on, there was no way back at all.
 
 | setting | values | default |
 | --- | --- | --- |
+| keep original text layer | off, on | off |
 | paper size | a4, letter, legal, a3, a5, fit image | a4 |
 | orientation | auto, portrait, landscape | auto |
 | page margin | 0–40 pt | 20 pt |
@@ -80,16 +102,128 @@ Choices are stored in `localStorage` and read while a file is being processed,
 so they can't be acted on retroactively — by the time the output screen is up,
 the page images have already been encoded at the quality and size that were set.
 Acting on a change therefore means running the file again, which is what `[s]`
-on the output screen does: it discards the result and returns to the start
-screen with the panel already open.
+on the output screen does: it discards the result and goes back to the sample
+screen, where the change can be seen before it is paid for.
+
+## The sample screen
+
+Picking a file does not start the run. It processes page 1 and stops:
+
+```
+> scan.pdf
+
+  ┌────────┐ ┌─────────────────────┐
+  │        │ │                     │   left:  the page on its sheet
+  │      ▭ │ │   the page at 100%  │   right: the middle of it, at 100%
+  │        │ │                     │
+  └────────┘ └─────────────────────┘
+  page 1 as the settings below make it · right, the page at 100%
+  estimated  ≈ 12.4 MB  (30 × 424 KB)
+
+settings:
+    ...
+
+> [enter] process all 30 pages
+```
+
+The settings decide something lossy, and until they have been applied to an
+actual page there is nothing to decide it on. Answering that after the run is
+answering it too late: a `70%` that turned out too harsh costs a whole re-run to
+correct, and the re-run costs another one to check. Here it costs a page.
+
+Four things make it worth the extra keypress rather than merely honest:
+
+- **the estimate.** Page 1's encoded size times the page count. It is the number
+  the compression settings are actually chosen on — and it is the one the output
+  screen puts first for the same reason. The multiplication is printed because it
+  is the whole basis: one page has been encoded, and a reader who knows that
+  knows how far to trust the total.
+- **the sheet, not just the picture.** `paper size`, `orientation` and
+  `page margin` decide how much of the page the scan takes up, which no bare
+  picture shows. The frame's proportions and padding come from `sheetFor` in
+  `pdf/build.js` — the function that lays the real page out — rather than from a
+  copy of its rules, because a preview of the geometry that disagrees with the
+  geometry is worse than no preview.
+- **the page at 100%.** The sheet shows it at about a twelfth of its size, and at
+  a twelfth of its size a JPEG block is two thirds of one screen pixel: shrinking
+  a page is itself the strongest denoiser there is, so a thumbnail cannot show
+  compression damage however carefully it is looked at. Measured on a 2600 px
+  text scan, stepping `jpeg quality` from 50% to 95% changes **0%** of the
+  thumbnail's pixels visibly and **10%** of the 100% window's.
+
+  100% means 100% of the **page**, not of the image — one point to 4/3 CSS
+  pixels, what a viewer shows with nothing zoomed, however many image pixels went
+  into it. The distinction is the whole difference between a useful window and a
+  misleading one: cut to the image instead, `max page pixels` changed how much of
+  the page fitted beside it, so the one setting whose entire effect is resolution
+  was the one setting the window could not be used to compare — it moved the
+  frame every time it moved the pixels. Cut to the page, the frame holds still
+  (45% of the page width at every budget) and the budget does what it actually
+  does: the same piece of page, more or less finely resolved. `zoom` comes from
+  `pointsPerPixel` in `pdf/build.js`, the function that places the image on the
+  real page, for the same reason the sheet's proportions do.
+
+  The window is as wide as the row leaves it, so a wider terminal is more of the
+  page rather than a bigger picture of the same amount; the outline on the sheet
+  says where it was cut from. It sits beside the sheet rather than behind a click
+  because the space there is empty anyway, and a judgement that needs two views
+  should not need an interaction to reach the second one.
+- **the cost of changing one's mind.** `paper size`, `orientation` and
+  `page margin` never touch the pixels, so stepping them only moves the frame
+  and repaints. `jpeg quality` and `max page pixels` do, so they re-encode —
+  from the bitmap decoded the first time round, not by opening the page again.
+  Which setting reaches which half of the pipeline is recorded as `affects` on
+  the setting itself in `settings.js`, where the answer is a fact about the
+  setting rather than a guess that goes stale.
+
+If page 1 has no page-sized image the screen says so, and says what that means:
+the document is probably not a scan and only its metadata will be removed. That
+verdict properly needs a third of the document, so the sample hedges rather than
+concludes — a cover page is exactly the page that would mislead it.
+
+`[enter]` passes straight through, so a run that needed no decision pays one
+page and one keypress for the one that did.
+
+## The output screen
+
+The cleanup is lossy on purpose — pages come out as re-encoded JPEGs — so the
+screen that reports it shows the result rather than asserting it:
+
+- the first page, in the same figure the sample screen uses — the page on its
+  sheet, and the middle of it beside that at 100%. The same page the sample
+  proposed, but
+  a different claim: that one was a proposal and this is the delivery. The tool's
+  whole assertion is that it changed the file, and a screen that only says "done"
+  asks to be taken on trust — so the result is shown even to someone who has just
+  seen the sample it was promised from.
+- `size  2.4 MB → 480 KB  -80%`. The percentage is the part worth reading. It
+  is quite often positive: a scan whose source images were already compressed
+  harder than the current settings comes out *bigger*, and that is exactly the
+  case a "done ✓" alone would hide.
+- that the file was not a scan and its pages were left alone, on the
+  metadata-only path only. That they were *rebuilt* goes unsaid: the figure above
+  is the rebuilt page and the summary already counted them, so the line would
+  have been reporting what the screen was showing.
+- what went wrong with a download, when one does. It stays on the screen: the
+  result is still on offer in the other two formats, so a failed save is
+  something to act on rather than something to be told once.
+- which metadata fields the **source** was carrying, by name. Read from the
+  file's own info dictionary rather than from the list the app strips: on the
+  rebuild path the output is a fresh document that never had them, so reporting
+  what was deleted from *it* would report nothing at all. A file with a clean
+  info dictionary says so instead.
+- whether the text layer was kept. Kept is printed in the warning colour,
+  because that text is the one part of the output that has not been cleaned.
+
+Picked images take a shorter version of the same account: they have no info
+dictionary, but they may carry exif and GPS, and the canvas round-trip is what
+drops those.
 
 ## Keeping the text layer
 
 Rebuilding a scan as fresh page images is what drops watermarks — and it drops
-the OCR text along with them. Turning `[t]` on at the output screen puts that
-text back, so the result stays selectable and searchable. Unlike the settings
-above it takes effect immediately: the page images are already encoded, so the
-PDF is simply rebuilt around them.
+the OCR text along with them. Turning `keep original text layer` on under `[s]`
+puts that text back, so the result stays selectable and searchable.
 
 How it survives the re-layout: the extractor records each text item in the
 coordinate space of the page image's *unit square* rather than in page

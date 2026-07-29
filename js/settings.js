@@ -27,6 +27,18 @@ const STORAGE_KEY = 'scanitizer.settings';
  * `def` names the value a fresh install starts on; `value` is the payload the
  * rest of the app consumes, `label` is what the terminal prints, and the
  * optional `note` is a caveat printed under the row.
+ *
+ * `affects` says which half of the pipeline a setting reaches, which is what
+ * the sample screen redraws itself from:
+ *
+ *   'image'   read by `rasterize` — changing it means encoding the page again
+ *   'layout'  read by `sheetFor` — the pixels are unchanged and only the sheet
+ *             around them moves, so the sample repaints without re-encoding
+ *   null      nothing the sample can show
+ *
+ * It is recorded here rather than worked out at the call site because this is
+ * where the answer is a fact about the setting; anywhere else it is a guess
+ * that goes stale the first time a setting moves.
  */
 export const SETTINGS = [
     {
@@ -35,6 +47,9 @@ export const SETTINGS = [
         id: 'keepText',
         label: t.keepText,
         note: t.keepTextNote,
+        // An invisible layer drawn behind the pixels: nothing a sample of the
+        // page could show, whichever way it is set
+        affects: null,
         def: 'off',
         values: [
             { id: 'off', label: t.off, value: false },
@@ -44,6 +59,7 @@ export const SETTINGS = [
     {
         id: 'paper',
         label: t.setPaper,
+        affects: 'layout',
         def: 'a4',
         values: [
             { id: 'a4', label: 'a4', value: [PORTRAIT_WIDTH, PORTRAIT_HEIGHT] },
@@ -58,6 +74,7 @@ export const SETTINGS = [
     {
         id: 'orientation',
         label: t.setOrientation,
+        affects: 'layout',
         def: 'auto',
         values: [
             { id: 'auto', label: t.optAuto, value: 'auto' },
@@ -68,6 +85,7 @@ export const SETTINGS = [
     {
         id: 'margin',
         label: t.setMargin,
+        affects: 'layout',
         def: String(PAGE_MARGIN),
         values: [0, 10, PAGE_MARGIN, 30, 40].map((pt) => ({
             id: String(pt),
@@ -81,6 +99,7 @@ export const SETTINGS = [
         id: 'quality',
         label: t.setQuality,
         note: t.setQualityNote,
+        affects: 'image',
         def: String(JPEG_QUALITY),
         values: [0.5, JPEG_QUALITY, 0.85, 0.95].map((q) => ({
             id: String(q),
@@ -94,6 +113,7 @@ export const SETTINGS = [
         id: 'imageSize',
         label: t.setImageSize,
         note: t.setImageSizeNote,
+        affects: 'image',
         def: String(MAX_PIXEL_HEIGHT),
         values: [
             [1240, 1754],

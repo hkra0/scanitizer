@@ -4,9 +4,9 @@
 import { moveSelection, endKeyNav, activateSelection, adjustSelection } from './terminal.js';
 
 /**
- * @param handlers  { getStage, getDoneMode, selectFile, proceed, retry, toggleSettings,
- *                    changeSettings, downloadPdf, downloadImages, downloadZip,
- *                    cancel, reset }
+ * @param handlers  { getStage, getDoneMode, selectFile, proceed, startRun, retry,
+ *                    toggleSettings, changeSettings, downloadPdf, downloadImages,
+ *                    downloadZip, cancel, reset }
  */
 export function installKeyboard(handlers) {
     document.addEventListener('keydown', (e) => {
@@ -47,6 +47,12 @@ export function installKeyboard(handlers) {
             handled = true;
         } else if (stage === 'init' && (e.key === 's' || e.key === 'S')) {
             handled = handlers.toggleSettings();
+        } else if (stage === 'sample') {
+            // No `s` here: the panel this screen is built around is already
+            // open, so there is nothing for the key to reach
+            if (e.key === 'Enter') { handlers.startRun(); handled = true; }
+            else if (e.key === 'f' || e.key === 'F') { handlers.selectFile(); handled = true; }
+            else if (e.key === '0') { handlers.reset(); handled = true; }
         } else if (stage === 'blocked' && (e.key === 'r' || e.key === 'R')) {
             handlers.retry();
             handled = true;

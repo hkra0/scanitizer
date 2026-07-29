@@ -14,8 +14,13 @@ import { PORTRAIT_HEIGHT, METADATA_FIELDS } from '../config.js';
  * cut to the image's own proportions, sized so its long edge matches A4's, so
  * nothing is padded out with white and the orientation setting has nothing to
  * decide.
+ *
+ * Exported because the sample screen draws the same sheet in the browser
+ * without building a PDF to do it. It has to be this function rather than a
+ * copy of its rules: a preview of the page geometry that disagrees with the
+ * page geometry is worse than no preview at all.
  */
-function sheetFor(imgWidth, imgHeight, { paper, orientation, margin }) {
+export function sheetFor(imgWidth, imgHeight, { paper, orientation, margin }) {
     if (!paper) {
         const long = PORTRAIT_HEIGHT - 2 * margin;
         const short = long * Math.min(imgWidth, imgHeight) / Math.max(imgWidth, imgHeight);
@@ -26,6 +31,28 @@ function sheetFor(imgWidth, imgHeight, { paper, orientation, margin }) {
     const landscape = orientation === 'landscape' ||
         (orientation === 'auto' && imgWidth > imgHeight);
     return landscape ? [portraitHeight, portraitWidth] : [portraitWidth, portraitHeight];
+}
+
+/**
+ * How large one image pixel comes out on the page, in points.
+ *
+ * The image is fitted inside the margins and keeps its proportions, so this one
+ * number is the whole placement — the drawn size is it times the pixel count,
+ * and the centring follows from that.
+ *
+ * Exported for the same reason `sheetFor` is: it is what tells the sample screen
+ * how big to draw a pixel when it shows the page at 100%. That figure has to
+ * come from the function that does the placing. Derived from a copy of the rule,
+ * it would quietly disagree with the file the moment either changed — and a
+ * preview claiming to be 100% is worth nothing if it is 100% of something else.
+ */
+export function pointsPerPixel(imgWidth, imgHeight, layout) {
+    const [pageWidth, pageHeight] = sheetFor(imgWidth, imgHeight, layout);
+    const margin = layout.margin;
+    return Math.min(
+        (pageWidth - 2 * margin) / imgWidth,
+        (pageHeight - 2 * margin) / imgHeight,
+    );
 }
 
 /**
@@ -61,7 +88,7 @@ export async function createNewPdf(extractedImages, onProgress) {
         const page = pdfDoc.addPage([pageWidth, pageHeight]);
         const maxWidth = pageWidth - 2 * margin;
         const maxHeight = pageHeight - 2 * margin;
-        const scale = Math.min(maxWidth / imgWidth, maxHeight / imgHeight);
+        const scale = pointsPerPixel(imgWidth, imgHeight, layout);
         const scaledWidth = imgWidth * scale;
         const scaledHeight = imgHeight * scale;
 

@@ -1,18 +1,29 @@
 /* Design tokens, reset and page layout */
 
+/* The dim, warn and ok values are not free choices: every one of them carries
+   words — the drop hint, the setting notes, the reason a run failed — and they
+   are all read against --term-bg, so each clears 4.5:1 against it with a little
+   headroom rather than sitting on the line. They were picked by moving
+   lightness alone, so the hue and saturation are the ones this palette always
+   had. --text-dim is the load-bearing one: it is not decoration here, it is
+   most of the prose on the screen. */
 :root {
     --bg: #eeeeec;
     --term-bg: #fbfbfa;
     --border: #d2d2cc;
     --text: #333333;
-    --text-dim: #86867f;
-    --accent: #2a6fb7;
-    --warn: #d35400;
-    --ok: #3d8b4a;
+    --text-dim: #72726c;   /* 4.65:1 on --term-bg */
+    --accent: #2a6fb7;     /* 5.00:1 */
+    --warn: #c24d00;       /* 4.65:1 */
+    --ok: #388044;         /* 4.65:1 */
     /* The pixel the rest of the interface is drawn on. Same size as the
        tinyko's blow-up factor, so the rules, the gaps and the kaomoji's
        blocks are all the same square. */
     --px: 3px;
+    /* The width every picture in the terminal is drawn at — a whole number of
+       grid pixels, so a thumbnail and a sample sheet line up with each other
+       and with the rules */
+    --thumb: calc(var(--px) * 52);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -21,15 +32,35 @@
         --term-bg: #0b0b0b;
         --border: #272727;
         --text: #e0e0e0;
-        --text-dim: #7c7c7c;
-        --accent: #a44;
-        --warn: #ff8c00;
-        --ok: #5f9e6a;
+        --text-dim: #7c7c7c;   /* 4.72:1 on --term-bg */
+        /* The selected option is drawn in the accent, so the accent has to be
+           legible as body text — at #a44 the row under the cursor was the
+           hardest row on the screen to read. Same hue, same saturation, more
+           lightness. */
+        --accent: #bd5f5f;     /* 4.66:1 */
+        --warn: #ff8c00;       /* 8.44:1 */
+        --ok: #5f9e6a;         /* 6.17:1 */
     }
 }
 
 * {
     box-sizing: border-box;
+}
+
+/* Present to a screen reader, absent to everything else. Clipped rather than
+   `display: none` or `visibility: hidden`, both of which take the element out
+   of the accessibility tree along with the layout — which would defeat the
+   whole point of having it. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
 }
 
 body {
@@ -48,5 +79,14 @@ body {
 @media (max-width: 480px) {
     body {
         padding: 0.5rem;
+    }
+
+    /* A narrower sheet on a narrow screen, so the 1:1 window beside it still
+       gets enough width to be worth looking at. The sheet only has to show the
+       page's layout, which survives being smaller; the detail is the half that
+       cannot afford to shrink, since shrinking is what destroys the thing it is
+       there to show. */
+    :root {
+        --thumb: calc(var(--px) * 40);
     }
 }

@@ -24,6 +24,7 @@ let renderVersion = 0;
 
 let selEl = null;        // keyboard selection, null when the mouse is in charge
 let keyNavAnchor = null; // option the pointer rested on when keys took over
+let touchInput = false;  // the pointer is a finger, so there is no hover
 
 export function delay(ms) {
     return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
@@ -73,6 +74,37 @@ function printing(write) {
 
 export function initTerminal(root) {
     termRoot = root;
+    installPointerMode();
+}
+
+/**
+ * Which kind of device is driving the pointer.
+ *
+ * A finger has no hover. Scrolling drags it across every row on the way past,
+ * and the browser leaves the last one it crossed matching `:hover` afterwards,
+ * so a swipe ends with a row lit that the user never pointed at. Touch input
+ * therefore switches the hover highlight off altogether: what a finger can mean
+ * is a tap, and a tap pins its row explicitly (see `termOption`), so the only
+ * rows that light are the ones something was actually done to.
+ *
+ * Read from the events rather than from `(pointer: coarse)`, because the
+ * question is which device is in use right now, not which ones exist — a laptop
+ * with a touchscreen and a tablet with a mouse are both ordinary.
+ */
+function installPointerMode() {
+    const setTouch = (on) => {
+        if (touchInput === on) return;
+        touchInput = on;
+        document.body.classList.toggle('touch-input', on);
+    };
+    // The mode has to be right before the tap's own compatibility mouse events
+    // arrive, which is why this is the press and not the move that follows it
+    document.addEventListener('pointerdown', (e) => setTouch(e.pointerType !== 'mouse'), true);
+    // A move is the one signal a finger can't fake — it is also exactly what
+    // hovering is, so nothing is restored before there is something to hover
+    document.addEventListener('pointermove', (e) => {
+        if (e.pointerType === 'mouse') setTouch(false);
+    }, true);
 }
 
 // The header is printed into the root; once boot finishes it hands over a
@@ -156,8 +188,9 @@ export function termCaret() {
 /**
  * A row whose value is stepped rather than clicked through blindly: the
  * left/right arrows call `onAdjust` with -1/+1, and a click on the row is
- * simply a step forward. Two-value lists cover what used to be a toggle, so
- * on/off options and multi-value ones behave the same way.
+ * simply a step forward. A two-value list is how an on/off option is expressed,
+ * so plain toggles and multi-value settings behave the same way and there is no
+ * second kind of row to maintain.
  *
  * `state` is { label, cls, wrap } — `label` is already localized by the caller,
  * since this module deliberately holds no strings.
@@ -180,11 +213,10 @@ export function termChoice(key, text, state, onAdjust, target) {
 /**
  * One of the wrapping glyphs of a stepped row, made into a target of its own.
  *
- * `< value >` has always been drawn as though the arrows were things you could
- * press, while the only way to act on them was the arrow keys or a click
- * anywhere on the row — which can only ever step *forward*. On a touch screen
- * that left no way back at all: a value could only be cycled all the way round.
- * Now the glyph does what it has been claiming to do.
+ * `< value >` is drawn as though the arrows were things you could press, so
+ * they have to be. The row's own click can only step *forward*, and on a touch
+ * screen there are no arrow keys behind it — without these, a value could only
+ * be cycled the whole way round to get back one place.
  *
  * Hidden from assistive tech: these duplicate what the row and the arrow keys
  * already offer, and the row carries an aria-label of its own, so exposing them
@@ -264,9 +296,18 @@ export function termOption(key, text, onClick, target) {
     printing(() => el.appendChild(document.createTextNode(key ? ' ' + text : text)));
     el._ariaBase = text;
     el.addEventListener('click', onClick);
-    // Moving onto a different option hands control back to the mouse
+    // A tap is the whole of a finger's pointing: with hover suppressed, the row
+    // acted on is marked the way a hovered one would be, so a stepped setting
+    // still shows which row the value that just changed belongs to. Capturing,
+    // because the `<` and `>` glyphs stop the click from reaching the row.
+    el.addEventListener('click', () => {
+        if (touchInput) markSelected(el);
+    }, true);
+    // Moving onto a different option hands control back to the mouse. A finger
+    // can't move onto anything — the compatibility mouseenter its tap fires
+    // would only unmark the row the tap is about to mark.
     el.addEventListener('mouseenter', () => {
-        if (keyNavAnchor !== el) endKeyNav();
+        if (!touchInput && keyNavAnchor !== el) endKeyNav();
     });
     // Tabbing in lights the same cursor the arrows drive, so there is only ever
     // one selected row. A click focuses too, but not *visibly* — that stays the
@@ -299,16 +340,15 @@ export function termOption(key, text, onClick, target) {
  *               a crop: the sheet shows the page at about a twelfth of its
  *               size, and at a twelfth of its size a JPEG block is two thirds
  *               of one screen pixel — every compression artefact there is to
- *               judge has been averaged away by the act of shrinking it. The
- *               thumbnail never showed quality; it only looked as though it
- *               might.
+ *               judge has been averaged away by the act of shrinking it. A
+ *               thumbnail cannot show quality; it only looks as though it might.
  *
  * Side by side rather than behind a click: the space to the right of a page is
  * empty anyway, and a judgement that needs two views should not need an
- * interaction to reach the second one. There is no link out to a full-size
- * image — that was the one control on this screen that left the app, and what
- * it opened was the whole page scaled to fit a window, which is the one thing
- * that cannot answer the question either.
+ * interaction to reach the second one. Nor is there a link out to the full-size
+ * image: what that opens is the whole page scaled to fit a window, which cannot
+ * answer the question either, and it is the one control here that would leave
+ * the app.
  *
  * Created empty and filled afterwards: the settings under it change what
  * belongs in it, and redrawing the row each time would take the option cursor
@@ -375,13 +415,12 @@ export function termPage(target) {
  * size one image pixel comes out at, from the same function that places the
  * image on the real page.
  *
- * Getting this from the image instead was a bug with a tell: `max page pixels`
- * changed how much of the page the window covered. More pixels in the page meant
- * fewer of them fit beside it, so raising the budget silently zoomed in — the
- * one setting whose whole effect is resolution was the one setting the window
- * could not be used to compare, because it moved the frame every time it moved
- * the pixels. Cut to the page, the frame holds still and the budget does what it
- * actually does: the same piece of page, more or less finely resolved.
+ * Taking the scale from the image instead would make `max page pixels` move the
+ * frame: more pixels in the page means fewer of them fit beside it, so raising
+ * the budget would silently zoom in, and the one setting whose whole effect is
+ * resolution would be the one setting this window could not be used to compare.
+ * Cut to the page, the frame holds still and the budget does what it actually
+ * does: the same piece of page, more or less finely resolved.
  *
  * Smoothed rather than nearest-neighbour, for the same reason. At most budgets a
  * page carries more pixels than 100% has room for, so this is usually a

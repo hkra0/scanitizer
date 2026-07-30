@@ -130,9 +130,13 @@
     opacity: 0;
 }
 
-/* Hover highlights the option, unless the keyboard has taken over */
+/* Hover highlights the option, unless the keyboard has taken over — or the
+   pointer is a finger, which hovers everything it scrolls past and stays there
+   (`touch-input`, set by the terminal from the live pointer type). A tap marks
+   its row with `is-sel` instead, so touch highlights what was done, not what a
+   swipe went over. */
 .tl-option.is-sel,
-body:not(.key-nav) .tl-option:hover {
+body:not(.key-nav):not(.touch-input) .tl-option:hover {
     color: var(--accent);
 }
 
@@ -142,13 +146,13 @@ body:not(.key-nav) .tl-option:hover {
    again or the row highlights around a `[+]` that stays grey. */
 .tl-option.is-sel .tl-key,
 .tl-option.is-sel .tl-state,
-body:not(.key-nav) .tl-option:hover .tl-key,
-body:not(.key-nav) .tl-option:hover .tl-state {
+body:not(.key-nav):not(.touch-input) .tl-option:hover .tl-key,
+body:not(.key-nav):not(.touch-input) .tl-option:hover .tl-state {
     color: var(--accent);
 }
 
 .tl-option.is-sel .tl-cursor,
-body:not(.key-nav) .tl-option:hover .tl-cursor {
+body:not(.key-nav):not(.touch-input) .tl-option:hover .tl-cursor {
     opacity: 1;
 }
 

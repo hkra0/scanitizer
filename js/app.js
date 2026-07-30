@@ -39,6 +39,8 @@ import {
     openSettings,
 } from './screens.js';
 import { installKeyboard } from './keyboard.js';
+import { installDragAndDrop } from './dragdrop.js';
+import { createSampleScheduler } from './sampleScheduler.js';
 import {
     initTerminal,
     termInvalidate,
@@ -164,11 +166,12 @@ function reporter(label) {
  *
  * This is the one stage with no checkpoints inside it: `save()` is pdf-lib's,
  * it takes no progress callback, and on a long document it is where a good
- * share of the wait goes. So Escape here used to do nothing at all — the flag
- * was set, "cancelled..." was printed over the spinner, and then the run
- * finished and showed the output screen as though nothing had been asked.
+ * share of the wait goes. Without the checks around it, Escape pressed here
+ * does nothing at all — the flag is set, "cancelled..." is printed over the
+ * spinner, and the run then finishes and shows the output screen as though
+ * nothing had been asked.
  *
- * The save still can't be interrupted, but the answer can be honoured: check
+ * The save cannot be interrupted, but the answer can still be honoured: check
  * once it returns and throw the work away. That costs the user the wait they
  * were already having, and it keeps the promise the screen makes — an option
  * that says `[esc] cancel` has to cancel.
@@ -235,8 +238,9 @@ function pendingFileLabel() {
 
 // Bail out of processing and go back to the start screen, carrying the reason
 // with it. The reason is part of that screen and stays until something else is
-// drawn — it used to be a warning, which expired two seconds later and took the
-// only account of what went wrong with it.
+// drawn, rather than being a notice on a timer: what went wrong is what the
+// next attempt is decided on, so it has to still be there when the decision is
+// made.
 //
 // The file stays in the picker. Some failures are the file's fault and some are
 // the settings' — a scan that runs out of memory at one page size will go
@@ -346,9 +350,9 @@ async function downloadAsImages() {
         // A cancelled page-by-page save keeps whatever already landed; the rest
         // simply never starts, and the output screen still has all three formats
         if (err !== CANCELLED) {
-            // This used to rethrow, out of an async function nobody awaits —
-            // the rejection went nowhere and the run stayed on the progress
-            // screen, spinner turning, with no way out but a reload
+            // Reported rather than rethrown: nobody awaits this, so a rejection
+            // would go nowhere and leave the run on the progress screen with
+            // the spinner turning and no way out but a reload
             console.error('Saving images failed:', err);
             notice = t.saveFailed;
         }
@@ -389,15 +393,23 @@ function closeSession() {
     const session = state.session;
     state.session = null;
     if (!session?.pdf) return;
-    invalidateSample();
+    sample.invalidate();
     // Destroying a document a sample is still reading does not fail that read,
     // it leaves it pending for good — so the close waits for the page in flight
     // while whoever asked for it carries straight on
-    samplePending.then(() => session.pdf.destroy());
+    sample.settled().then(() => session.pdf.destroy());
 }
 
-/** Returns null having already said what went wrong on the start screen. */
-async function openSession(files) {
+/**
+ * Returns null having already said what went wrong on the start screen.
+ *
+ * @param current  () => boolean — whether this pick is still the one on screen.
+ *                 Opening is where the second pick usually lands, so both the
+ *                 password question and the failure notice are withheld once
+ *                 this file has been superseded: neither belongs to the screen
+ *                 that has taken its place.
+ */
+async function openSession(files, current = () => true) {
     const isPdf = files[0].name.toLowerCase().endsWith('.pdf') ||
         files[0].type === 'application/pdf';
     if (!isPdf) return { files };
@@ -414,9 +426,12 @@ async function openSession(files) {
             disableFontFace: true,
             verbosity: 0,
         });
-        attachPasswordPrompt(loadingTask, () => { gaveUpOnPassword = true; });
+        attachPasswordPrompt(loadingTask, () => { gaveUpOnPassword = true; }, current);
         return { pdf: await loadingTask.promise, buffer };
     } catch (err) {
+        // A superseded pick has no screen to report to, and the rejection it is
+        // reporting is usually one it caused itself by standing down
+        if (!current()) return null;
         if (gaveUpOnPassword) {
             abortWith(t.passwordNotProvided);
         } else {
@@ -451,38 +466,6 @@ async function firstPageImage(session) {
 }
 
 // === The sample ===
-
-// One page in flight at a time, and at most one more queued behind it. Holding
-// an arrow key down cycles a setting faster than a page can be encoded, and
-// what that should produce is the page for the value it comes to rest on — not
-// a queue of pages for every value it passed through.
-let sampleBusy = false;
-let sampleStale = false;
-
-/**
- * Bumped whenever the sample stops being of what is on screen: a new file, the
- * run starting, the way back to the start screen. A pass whose token has moved
- * on throws away what it produced instead of painting it over the answer to a
- * question nobody is asking any more.
- */
-let sampleToken = 0;
-
-/**
- * The pass in flight, and the reason there is one to await at all.
- *
- * Everything the sample touches is shared with what comes after it — the run
- * reads the same document, a new file closes it. pdf.js does not fail a read
- * whose document is destroyed underneath it, it simply never answers, so the
- * sample cannot merely be abandoned: it has to be waited out. Invalidating and
- * awaiting are two separate things here and both are needed — the token says
- * the answer is no longer wanted, the promise says the document is free.
- */
-let samplePending = Promise.resolve();
-
-function invalidateSample() {
-    sampleToken++;
-    sampleStale = false;
-}
 
 // The sheet page 1 would land on, and how big one of its pixels comes out on
 // it. With no page yet it is portrait A4 through the same function, so the empty
@@ -526,14 +509,6 @@ function paintSample() {
     });
 }
 
-function refreshSample() {
-    // The queued pass runs inside the one already going, so the promise the
-    // caller is handed covers it too
-    if (sampleBusy) sampleStale = true;
-    else samplePending = samplePass(sampleToken);
-    return samplePending;
-}
-
 /**
  * Page 1 under the settings as they now stand.
  *
@@ -559,51 +534,48 @@ function releaseSampleSource() {
     state.sampleSource = null;
 }
 
-async function samplePass(token) {
-    const session = state.session;
-    if (!session) return;
-    sampleBusy = true;
+// The sample's six moments, wired to the scheduler that owns the ordering. Each
+// one is the app's answer to a question the scheduler has already decided: what
+// to run, what is worth keeping, what is worth showing, what has to be released.
+const sample = createSampleScheduler({
+    ready: () => Boolean(state.session),
+    pass: () => encodeSample(state.session, state.sampleSource),
+
     // The sheet says it, so the caption does not say it again — the sheet is
     // where the missing picture is, which is where the reason for it belongs
-    sampleUpdate({ image: { note: t.sampleBusy }, caption: '', size: '' });
-    try {
-        let image;
-        do {
-            sampleStale = false;
-            image = await encodeSample(session, state.sampleSource);
-            // Superseded while this was encoding. Checked before anything is
-            // stored, so a pass that is too late leaves no trace — including
-            // the bitmap it may have just decoded, which nothing else holds.
-            if (token !== sampleToken) {
-                closeBitmap(image?.source);
-                return;
-            }
-            if (image?.source) state.sampleSource = image.source;
-        } while (sampleStale);
+    busy: () => sampleUpdate({ image: { note: t.sampleBusy }, caption: '', size: '' }),
+
+    // The decoded bitmap is the expensive half and only the first pass produces
+    // one; holding it is what makes every later pass the encoder alone
+    keep: (image) => { if (image?.source) state.sampleSource = image.source; },
+
+    show: (image) => {
         releasePreviewUrl();
         state.sampleImage = image;
         if (image) state.previewUrl = URL.createObjectURL(image.blob);
         paintSample();
-    } catch (err) {
+    },
+
+    // Nothing else holds this bitmap, so a pass that is too late has to release
+    // its own
+    drop: (image) => closeBitmap(image?.source),
+
+    fail: (err) => {
         console.error('Rendering the sample page failed:', err);
-        if (token === sampleToken) {
-            sampleUpdate({ image: { note: t.sampleFailed }, caption: '', size: '' });
-        }
-    } finally {
-        sampleBusy = false;
-    }
-}
+        sampleUpdate({ image: { note: t.sampleFailed }, caption: '', size: '' });
+    },
+});
 
 // A settings change costs whatever it actually reaches. The sheet moving around
 // the same pixels is a repaint; different pixels are a page to encode again.
 function settingChanged(setting) {
-    if (setting.affects === 'image') refreshSample();
+    if (setting.affects === 'image') sample.refresh();
     else if (setting.affects === 'layout') sampleUpdate({ geometry: sampleGeometry() });
 }
 
 async function startSample() {
     state.stage = 'sample';
-    invalidateSample();
+    sample.invalidate();
     termStopSpinner();
     setAccent('var(--accent)');
     setMood('idle');
@@ -623,19 +595,44 @@ async function startSample() {
     if (!shown || state.stage !== 'sample') return;
     // A pass from before this screen may still be holding the last page it was
     // given; the one it is about to be replaced by is the one to release
-    await samplePending;
+    await sample.settled();
     if (state.stage !== 'sample') return;
 
     releasePreviewUrl();
     releaseSampleSource();
     state.sampleImage = null;
-    refreshSample();
+    sample.refresh();
 }
 
 // === Processing ===
 
+/**
+ * === One pick at a time ===
+ *
+ * `handleFileSelection` suspends twice — on the libraries and on opening the
+ * file — and a second pick can arrive in either gap: the picker allows it, and
+ * so does a drop. Two invocations in flight then race over `state.session`.
+ * Whichever resumes last installs its own, the other's document is left open
+ * with nothing holding a reference to close it, and a close belonging to one
+ * pick can land on the document the other has just installed.
+ *
+ * That last one is the failure with no way back. pdf.js does not fail a read of
+ * a destroyed document — it never answers — so the sample stops with the notice
+ * on the sheet and the run stops with the spinner turning, and since the pass
+ * never settles, everything that waits on `sample.settled()` waits for good.
+ * There is no error, and nothing short of a reload gets out of it.
+ *
+ * So every pick takes a ticket. After each suspension it asks whether it is
+ * still the one on screen, and a superseded pick closes whatever it opened and
+ * returns without touching the state or drawing anything.
+ */
+let pickGeneration = 0;
+
 async function handleFileSelection() {
     if (state.stage === 'booting') return;
+    const pick = ++pickGeneration;
+    const current = () => pick === pickGeneration;
+
     // A new pick supersedes whatever was open; nothing below it survives
     closeSession();
     discardResult();
@@ -664,12 +661,22 @@ async function handleFileSelection() {
     // moments after load may arrive first; the progress line above is already
     // up, so this just waits under the spinner
     if (!await vendorReady) {
-        abortWith(t.libsUnavailable);
+        if (current()) abortWith(t.libsUnavailable);
         return;
     }
+    if (!current()) return;
 
-    const session = await openSession(files);
+    const session = await openSession(files, current);
     if (!session) return;
+    // Superseded while the file was being opened. The pick that replaced this
+    // one has a session of its own, so this document is not going to be
+    // installed — and nothing else holds it, so this is its only chance to be
+    // closed. Left open it would keep its worker and its pages alive for the
+    // life of the page.
+    if (!current()) {
+        session.pdf?.destroy();
+        return;
+    }
     // Opening is the one stretch with no checkpoints in it — reading the file
     // and parsing it take no progress callback — so the answer is honoured on
     // the way out instead, the same way `saveCancellably` honours it
@@ -686,11 +693,11 @@ async function handleFileSelection() {
 async function startRun() {
     if (!state.session) return;
     state.stage = 'processing';
-    invalidateSample();
+    sample.invalidate();
     startProgress(t.extracting + '...', pendingFileLabel());
     // The sample has been told its page is no longer wanted, but it still has
     // the document until it lets go of it
-    await samplePending;
+    await sample.settled();
     if (cancelRequested) {
         abortWith(t.cancelled);
         return;
@@ -708,8 +715,16 @@ async function startRun() {
 // Giving up has to end the loading task itself: not calling `updatePassword`
 // leaves pdf.js waiting forever, so the task is destroyed, and the rejection
 // that follows is what carries the flow into the catch below.
-function attachPasswordPrompt(loadingTask, onGiveUp) {
+function attachPasswordPrompt(loadingTask, onGiveUp, current) {
     loadingTask.onPassword = (updatePassword, reason) => {
+        // Superseded before the file got as far as asking. Standing down here
+        // rather than putting the question up keeps a file nobody is waiting
+        // for from taking the screen off the one that replaced it — and the
+        // rejection that follows is swallowed by the catch, for the same reason.
+        if (current && !current()) {
+            loadingTask.destroy();
+            return;
+        }
         state.stage = 'password';
         const giveUp = () => {
             passwordGiveUp = null;
@@ -776,10 +791,9 @@ async function runPdf({ pdf, buffer }) {
         if (imgs === false) {
             // Not a scan: leave the pages alone and only strip the metadata.
             // The run carries on under the spinner and the explanation lands on
-            // the output screen, where it stays — it used to be a two-second
-            // warning printed onto a cleared screen, which held the result back
-            // by exactly as long as it took to say something the output screen
-            // then said again.
+            // the output screen, where it stays. Saying it here instead would
+            // hold the result back for as long as it took to read, to say
+            // something the output screen says again anyway.
             checkpoint();
             termUpdateProgress(t.saving);
             const originalPdfDoc = await PDFDocument.load(buffer);
@@ -889,69 +903,21 @@ function finishProcessing(newPdfBlob, extractedImages, directDownload, source = 
 
 // === Drag and drop ===
 //
-// The whole window is the target, not a marked-out rectangle: there is only one
-// thing on the page to drop onto, so asking the user to aim is asking for
-// nothing. A drop hands the files to the same input the picker fills, so
-// everything downstream — the file label, `[s]` running the same file again —
-// works without knowing where the files came from.
+// A drop hands the files to the same input the picker fills, so everything
+// downstream — the file label, `[s]` running the same file again — works without
+// knowing where the files came from.
 
-const dropTypes = /^(application\/pdf|image\/)/;
-
-function droppable() {
-    return state.stage === 'init' || state.stage === 'sample' || state.stage === 'done';
-}
-
-function acceptedFiles(dataTransfer) {
-    return Array.from(dataTransfer.files || []).filter(
-        (file) => dropTypes.test(file.type) || file.name.toLowerCase().endsWith('.pdf')
-    );
-}
-
-// dragenter/dragleave fire for every element the pointer crosses, so the depth
-// is counted rather than the events trusted
-let dragDepth = 0;
-
-function setDragging(on) {
-    document.body.classList.toggle('dragging', on);
-}
-
-document.addEventListener('dragenter', (e) => {
-    if (!droppable() || !e.dataTransfer?.types.includes('Files')) return;
-    e.preventDefault();
-    dragDepth++;
-    setDragging(true);
-});
-
-document.addEventListener('dragover', (e) => {
-    if (!droppable() || !e.dataTransfer?.types.includes('Files')) return;
-    // Without this the browser keeps the drop for itself and navigates away
-    // from the page, losing whatever was on screen
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-});
-
-document.addEventListener('dragleave', () => {
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) setDragging(false);
-});
-
-document.addEventListener('drop', (e) => {
-    if (!droppable()) return;
-    e.preventDefault();
-    dragDepth = 0;
-    setDragging(false);
-
-    const files = acceptedFiles(e.dataTransfer);
-    if (files.length === 0) {
-        showInit(t.dropRejected);
-        return;
-    }
-    // Load the picker from the drop, so a dropped file is indistinguishable
-    // from a picked one everywhere else
-    const transfer = new DataTransfer();
-    files.forEach((file) => transfer.items.add(file));
-    fileInput.files = transfer.files;
-    handleFileSelection();
+installDragAndDrop({
+    enabled: () => state.stage === 'init' || state.stage === 'sample' || state.stage === 'done',
+    onFiles: (files) => {
+        // Load the picker from the drop, so a dropped file is indistinguishable
+        // from a picked one everywhere else
+        const transfer = new DataTransfer();
+        files.forEach((file) => transfer.items.add(file));
+        fileInput.files = transfer.files;
+        handleFileSelection();
+    },
+    onRejected: () => showInit(t.dropRejected),
 });
 
 // === Start ===

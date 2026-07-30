@@ -56,6 +56,8 @@ js/
   terminal.js       all DOM writes: lines, spinner, progress, warnings, menu
   screens.js        what the terminal shows at each stage
   keyboard.js       keyboard shortcuts and option navigation
+  dragdrop.js       dropping a file anywhere on the window
+  sampleScheduler.js  one sample pass in flight, one queued, the rest discarded
   images.js         image files -> page images
   download.js       saving PDFs, loose images and zips
   pdf/
@@ -63,6 +65,11 @@ js/
     extract.js      pull the page-sized scan image out of each PDF page
     textlayer.js    re-draw the source text, invisibly, over the page images
     build.js        assemble page images into a clean PDF
+test/
+  matrix.test.mjs      the affine helpers, as the properties their callers rely on
+  geometry.test.mjs    page geometry: what the sample screen and the builder share
+  page-image.test.mjs  which image on a page is the scan of it
+  browser-globals.mjs  the few globals the pure modules touch on the way in
 ```
 
 The layering is one-way: `app.js` orchestrates, `screens.js` describes screens,
@@ -271,3 +278,45 @@ a guarantee that nothing hidden survives, leave it off.
 ```bash
 python3 -m http.server 4173
 ```
+
+### Tests
+
+```bash
+node --test "test/*.test.mjs"
+```
+
+Node's own runner, no dependencies and no build — the same bargain the rest of
+the project makes. Needs Node 22.7 or newer, which is where `.js` files are
+detected as ES modules without a `package.json` to declare it.
+
+There are three of them, and the choice of what to cover is the point. These are
+the places where being wrong produces a **plausible file rather than an error**:
+a text layer that lands off the page, a preview that disagrees with the PDF it
+promised, a scan mistaken for a watermark. Everything else in the app announces
+its own failures — a screen that renders wrongly is visible, a library that
+fails to load says so in the boot log — and is left to the eye, which is faster
+at it than a test would be.
+
+- **`matrix.test.mjs`** — the affine helpers, written as the properties the
+  callers depend on rather than as expected numbers. Composing two matrices and
+  mapping a point through the result has to equal mapping it through the two in
+  turn; inverting a placement has to undo it, rotations and flips included. A
+  table of expected values would pass just as happily if the convention
+  underneath it changed.
+- **`geometry.test.mjs`** — `sheetFor` and `pointsPerPixel`, the two functions
+  the sample screen and `createNewPdf` share. It re-derives the builder's own
+  placement from them and asserts the image lands inside the margins, keeps its
+  proportions, is centred, and is as large as the margins allow — across every
+  paper size, orientation and margin, and for portrait, landscape, square and
+  panoramic input.
+- **`page-image.test.mjs`** — `pickPageImage`, at the measured figures from a
+  real CamScanner page (scan at 0.87 of the page, watermark at 0.006). It tests
+  the ranking the doc comment promises rather than the constants, so the
+  thresholds can be tuned without breaking it — including the asymmetry that
+  matters most: coverage is the only veto, so a page with any candidate at all
+  keeps one.
+
+The suite is checked against deliberate regressions rather than trusted because
+it is green: swapping the arguments to `multiplyMatrices`, reading `paintedSize`
+off `a`/`d` instead of the column norms, turning the stretched-image demotion
+into a veto, and stopping `auto` from turning the sheet each make it fail.

@@ -53,7 +53,7 @@ function scriptReady(id, globalName) {
  * pdf.js is then pointed at the verified copy via a blob URL.
  *
  * On failure it falls back to the plain URL: pdf.js still works, just without
- * the integrity check, which is no worse than before this was added.
+ * the integrity check — a weaker guarantee, but not a broken app.
  */
 async function pinWorker() {
     try {

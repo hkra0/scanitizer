@@ -61,9 +61,10 @@ function collectPaintedImages(ops) {
                     matrixStack: [...matrixStack, [...currentMatrix]] // copy current matrix
                 };
 
-            // Pop the matrix `save` pushed. Reading one slot deeper, as this
-            // used to, restores the *enclosing* save's matrix and silently
-            // mislocates every image inside a nested q/Q pair.
+            // Restore the matrix `save` pushed, which is the last slot — the
+            // stack is read before the pop, so the index is the top of it.
+            // Reading one slot deeper takes the *enclosing* save's matrix
+            // instead, and silently mislocates every image inside a nested q/Q.
             case pdfjsLib.OPS.restore:
                 return {
                     ...state,
@@ -144,8 +145,15 @@ function isShared(imageName) {
  *   - a watermark that is small, sharp and page-scoped passes every rule; it
  *     is stopped by coverage instead, which is what the measured CamScanner
  *     stamp (0.006 of the page) runs into.
+ *
+ * Exported for `test/page-image.test.mjs` rather than because anything else
+ * calls it. The ranking above is the one piece of judgement in the app whose
+ * failure is silent: picking wrong costs a page, and enough lost pages flip the
+ * whole document to the metadata-only path — an unchanged file, reported as a
+ * success. Reaching it through `extractImages` would mean mocking pdf.js, so it
+ * is reachable directly instead.
  */
-function pickPageImage(rawImages, pageArea) {
+export function pickPageImage(rawImages, pageArea) {
     let best = null;
     for (const { imageName, sourceWidth, matrix } of rawImages) {
         const { width, height } = paintedSize(matrix);
@@ -278,18 +286,6 @@ export async function extractImages(pdf, { onProgress, limit, keepSource } = {})
             ? [outputScale, 0, 0, outputScale, 0, 0]
             : null;
 
-        // Rendering populates page.objs, which is where the bitmaps come from.
-        //
-        // `intent: 'print'` is not about printing — it is what keeps this off
-        // requestAnimationFrame. pdf.js drives a display render one chunk per
-        // animation frame, and a browser stops delivering those to a tab that
-        // isn't visible, so a run left in a background tab stops here and never
-        // resumes: no error, no progress, just the spinner. Print intent
-        // schedules the same work on microtasks instead and finishes wherever
-        // the tab is. Nothing is being painted for a viewer anyway — the canvas
-        // is a scratch surface and the pixels are read out of the object stores
-        // afterwards — so this is also the intent that describes what the
-        // render is for.
         // Annotations are dropped rather than drawn. A large share of stamped
         // watermarks are Watermark or Stamp *annotations* sitting on top of the
         // page rather than content inside it, and turning them off removes that

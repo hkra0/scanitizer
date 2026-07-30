@@ -44,8 +44,8 @@ export async function downloadImages(images, baseName, onProgress) {
  * Every page in one archive.
  *
  * `onProgress` is handed straight to JSZip's own update callback, which is the
- * only visibility there is into a step that used to be a bare spinner however
- * long it took. It is also where a cancel gets noticed: the reporter throws
+ * only visibility there is into a step that would otherwise be a bare spinner
+ * however long it took. It is also where a cancel gets noticed: the reporter throws
  * from inside the callback, which rejects `generateAsync` — so the archive is
  * abandoned mid-build rather than being finished and then thrown away.
  */

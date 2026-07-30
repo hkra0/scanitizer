@@ -3,9 +3,19 @@
 .term-win {
     width: 100%;
     max-width: 560px;
-    border: 1px solid var(--border);
     background: var(--term-bg);
     overflow: hidden;
+}
+
+/* The frame only means something once the window has stopped growing: below
+   this the window is the whole page and a border round it is just a line
+   drawn inside the bezel. 592px is the 560px cap plus the body's 1rem of
+   padding on each side — the first width at which the window is not the full
+   width of the screen. */
+@media (min-width: 592px) {
+    .term-win {
+        border: 1px solid var(--border);
+    }
 }
 
 /* The cell. Sizes are whole pixels rather than rem, so a row is never half a

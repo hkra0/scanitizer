@@ -62,6 +62,7 @@ js/
   download.js       saving PDFs, loose images and zips
   pdf/
     matrix.js       2D affine matrix helpers shared by extract and textlayer
+    preflight.js    what each page holds, from the object dictionaries alone
     extract.js      pull the page-sized scan image out of each PDF page
     textlayer.js    re-draw the source text, invisibly, over the page images
     build.js        assemble page images into a clean PDF
@@ -69,6 +70,7 @@ test/
   matrix.test.mjs      the affine helpers, as the properties their callers rely on
   geometry.test.mjs    page geometry: what the sample screen and the builder share
   page-image.test.mjs  which image on a page is the scan of it
+  preflight.test.mjs   what the object dictionaries alone are allowed to decide
   browser-globals.mjs  the few globals the pure modules touch on the way in
 ```
 
@@ -183,6 +185,43 @@ Four things make it worth the extra keypress rather than merely honest:
   the setting itself in `settings.js`, where the answer is a fact about the
   setting rather than a guess that goes stale.
 
+A page that drew its own content — visible text, a chart — is not a scan of
+anything whatever images it holds, so it is rejected before its images are ranked
+at all. A brochure typeset around a full-bleed photograph answers every one of
+the ranking rules the way a scan does, and used to come out as the photograph
+alone, its text redrawn invisibly and its drawings gone. An OCR layer is written
+in an invisible text rendering mode and so does not count against a page, which
+is what keeps an OCR'd scan a scan.
+
+A scan does not always arrive as one image per page. Some devices, and some
+producers handed an image too tall to store in one object, cut the page into
+horizontal strips; no strip is large enough to be the scan of a page, so such a
+document used to read as not being a scan at all and come back with only its
+metadata touched. What says otherwise is the total: strips of a scan add up to a
+page and a scattering of decorations does not. A page that reaches the floor
+between them is painted whole by pdf.js instead — at the resolution its own pieces
+were stored at, capped by the pixel budget in the settings — and goes on through
+the pipeline as any other page image.
+
+Which of these a page is turns on transforms in its content stream, so answering
+it costs a pdf.js parse per page, and pdf.js decodes every image it parses on the
+way. Most documents that are not scans need none of that: a PDF of typeset text
+has no image on any page, and that is visible in the object dictionaries alone.
+So `pdf/preflight.js` reads the structure first — about 20 ms for a 9 MB file —
+and gets exactly one veto, that no page in the document could hold a scan. It
+never decides which image is a scan, and whatever it cannot read it passes:
+a page whose images sit inside a form XObject, or whose resources will not parse,
+counts as "cannot say" rather than as evidence. The same survey answers the one
+question pdf.js cannot: whether an image is painted on more than one page, which
+is what a watermark or a letterhead is and a page's own scan is not. pdf.js only
+notices that from the second page onwards and only until its image cache fills,
+so a full-page watermark used to win page 1 outright.
+
+A page that holds a scan which cannot be decoded or encoded stops the run and
+says so. It used to be counted as a page with no scan on it, which meant a
+document could lose pages to failed decodes, tip onto the metadata-only path on
+the strength of them, and be reported as a success.
+
 If page 1 has no page-sized image the screen says so, and says what that means:
 the document is probably not a scan and only its metadata will be removed. That
 verdict properly needs a third of the document, so the sample hedges rather than
@@ -289,7 +328,7 @@ Node's own runner, no dependencies and no build — the same bargain the rest of
 the project makes. Needs Node 22.7 or newer, which is where `.js` files are
 detected as ES modules without a `package.json` to declare it.
 
-There are three of them, and the choice of what to cover is the point. These are
+There are four of them, and the choice of what to cover is the point. These are
 the places where being wrong produces a **plausible file rather than an error**:
 a text layer that lands off the page, a preview that disagrees with the PDF it
 promised, a scan mistaken for a watermark. Everything else in the app announces
@@ -309,14 +348,32 @@ at it than a test would be.
   proportions, is centred, and is as large as the margins allow — across every
   paper size, orientation and margin, and for portrait, landscape, square and
   panoramic input.
-- **`page-image.test.mjs`** — `pickPageImage`, at the measured figures from a
-  real CamScanner page (scan at 0.87 of the page, watermark at 0.006). It tests
-  the ranking the doc comment promises rather than the constants, so the
-  thresholds can be tuned without breaking it — including the asymmetry that
-  matters most: coverage is the only veto, so a page with any candidate at all
-  keeps one.
+- **`page-image.test.mjs`** — how a page's scan is identified, in three parts.
+  `pickPageImage`, at the measured figures from a real CamScanner page (scan at
+  0.87 of the page, watermark at 0.006): the ranking the doc comment promises
+  rather than the constants, so the thresholds can be tuned without breaking it —
+  including the asymmetry that matters most, that coverage is the only veto, so a
+  page with any candidate at all keeps one. `isBornDigital`, the veto that runs
+  before the ranking, on the two kinds of page it has to keep apart: a scan under
+  a stamped footer, and a page of prose over a full-bleed photograph.
+  `readPageMarks`, the walk that counts what each page drew — where the case
+  worth the test is an OCR layer inside a `q`/`Q`, since counting it as visible
+  text would quietly stop cleaning the one kind of document this app is for. And
+  `totalCoverage` and `renderScale`, the arithmetic behind painting a page whole:
+  that eight strips of a scan add up to a page while six small decorations do not,
+  and that a composite is rendered at its pieces' own resolution but never past
+  the pixel budget.
+- **`preflight.test.mjs`** — the two judgements made from the object dictionaries
+  alone, written mostly as what must *not* be ruled out: a scan with a typeset
+  cover and a colophon among it, and a page whose contents could not be
+  established. Plus the trap in the repetition test — one scanner makes one size,
+  so every page of a scan holds an image of identical dimensions, and counting
+  sizes rather than objects would demote every page's own scan at once.
 
 The suite is checked against deliberate regressions rather than trusted because
 it is green: swapping the arguments to `multiplyMatrices`, reading `paintedSize`
 off `a`/`d` instead of the column norms, turning the stretched-image demotion
-into a veto, and stopping `auto` from turning the sheet each make it fail.
+into a veto, stopping `auto` from turning the sheet, letting the text rendering
+mode leak out of a `q`/`Q`, keying repetition on image sizes instead of objects,
+and counting a page the preflight could not read as evidence against it each make
+it fail.

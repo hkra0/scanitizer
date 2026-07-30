@@ -19,7 +19,9 @@ import './browser-globals.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { pickPageImage } from '../js/pdf/extract.js';
+import {
+    pickPageImage, isBornDigital, readPageMarks, totalCoverage, renderScale,
+} from '../js/pdf/extract.js';
 import { PORTRAIT_WIDTH, PORTRAIT_HEIGHT } from '../js/config.js';
 
 const PAGE_AREA = PORTRAIT_WIDTH * PORTRAIT_HEIGHT;
@@ -47,7 +49,8 @@ function painted({ name = 'img_1', coverage, dpi = 300 }) {
 const SCAN = painted({ name: 'img_5', coverage: 0.87, dpi: 300 });
 const WATERMARK = painted({ name: 'g_img_2', coverage: 0.006, dpi: 300 });
 
-const pick = (images, area = PAGE_AREA) => pickPageImage(images, area);
+const pick = (images, area = PAGE_AREA, repeatedSizes = null) =>
+    pickPageImage(images, area, repeatedSizes);
 
 test('the scan is picked out from under a stamped watermark', () => {
     // The case the whole heuristic was built for, at the measured figures
@@ -128,13 +131,49 @@ test('the answer does not depend on the order the page painted them', () => {
 });
 
 test('the winner reports which store its pixels are in', () => {
-    // `shared` is not just a ranking input: the caller dispatches on it to choose
+    // `global` is not a ranking input: the caller dispatches on it to choose
     // between page.objs and page.commonObjs. Reporting it wrongly throws in the
-    // lookup, which is caught and counted as a page with no image — so a bug
-    // here is again a dropped page rather than an error.
-    assert.equal(pick([SCAN]).shared, false, 'page-scoped');
+    // lookup, and a page that holds a scan we cannot read stops the run — so a
+    // bug here is a failed document rather than a wrong one.
+    assert.equal(pick([SCAN]).global, false, 'in the page store');
     const stamp = painted({ name: 'g_img_1', coverage: 0.9 });
-    assert.equal(pick([stamp]).shared, true, 'promoted to the document-wide store');
+    assert.equal(pick([stamp]).global, true, 'promoted to the document-wide store');
+});
+
+test('the store an image is in does not decide whether it is repeated', () => {
+    // The two used to be the same test on the same prefix, which meant the
+    // ranking could only ever know what pdf.js's cache had noticed so far. With a
+    // survey of the document in hand they are separate questions, and a
+    // page-scoped store says nothing about repetition either way.
+    const sizes = new Set([`${SCAN.sourceWidth}x${SCAN.sourceHeight}`]);
+    const best = pick([SCAN], PAGE_AREA, sizes);
+    assert.equal(best.global, false, 'still the page store');
+    assert.equal(best.repeated, true, 'and still recognised as repeated');
+});
+
+test('a watermark is outranked on the first page it appears on', () => {
+    // The leak the survey closes. pdf.js promotes an image to its global cache
+    // only once a *second* page has painted it, so on page 1 a full-page
+    // watermark looks exactly like a scan — and being sharp and large, it wins.
+    // The survey counts the pages that reference the object, so page 1 knows.
+    const stamp = painted({ name: 'img_1', coverage: 0.99, dpi: 600 });
+    const scan = painted({ name: 'img_2', coverage: 0.55, dpi: 300 });
+    const repeated = new Set([`${stamp.sourceWidth}x${stamp.sourceHeight}`]);
+
+    assert.equal(pick([stamp, scan]).imageName, stamp.imageName, 'without the survey');
+    assert.equal(pick([stamp, scan], PAGE_AREA, repeated).imageName, scan.imageName,
+        'with it');
+});
+
+test('every page of a scan being the same size does not make them repeated', () => {
+    // The trap in keying on pixel size: one scanner produces one size, so every
+    // page of a scan has an image of identical dimensions. What the survey counts
+    // is pages per *object*, and each page's scan is its own object — so a set
+    // built from a real scan does not contain those dimensions at all, and the
+    // scan is not demoted.
+    const scan = painted({ name: 'img_1', coverage: 0.87 });
+    const stampSize = '80x40';
+    assert.equal(pick([scan], PAGE_AREA, new Set([stampSize])).repeated, false);
 });
 
 test('the winner carries the matrix it was painted with', () => {
@@ -158,4 +197,245 @@ test('an image with no stated pixel size is left unjudged, not demoted', () => {
     const unstated = { ...painted({ name: 'img_1', coverage: 0.9 }), sourceWidth: 0 };
     const stretched = painted({ name: 'img_2', coverage: 0.95, dpi: 10 });
     assert.equal(pick([unstated, stretched]).imageName, unstated.imageName);
+});
+
+// `isBornDigital`, the veto that runs before any of the above.
+//
+// The ranking rules only ever answer "which image on this page is the scan of
+// it", never "is this page a scan at all", and a page typeset around a
+// full-bleed photograph answers all of them exactly as a scan does. Without the
+// veto such a page comes out as the photograph alone — its text redrawn
+// invisibly by the text layer, its drawings gone — and is reported as a success.
+// So this is the one judgement in the app that can destroy content rather than
+// merely fail to clean it, and the tests are the two kinds of page it has to
+// keep apart.
+//
+// Like the tests above they are written against the promised behaviour rather
+// than the constants: the figures used are far enough either side of the
+// thresholds that retuning them does not break a test, only redefining what the
+// veto means does.
+
+// The furniture a producer stamps onto a scan, at its most generous: a header, a
+// footer with a date and a URL, a page number, a `Scanned by CamScanner` line,
+// and the box and rules drawn around them.
+const STAMPED_SCAN = { visibleGlyphs: 100, pathMarks: 4 };
+
+test('a scan under stamped furniture is not taken for a laid-out page', () => {
+    // The expensive direction. A vetoed page counts as non-scanned, and enough
+    // of them tip the document onto the metadata-only path — where a real scan
+    // is handed back unchanged and called a success.
+    assert.equal(isBornDigital(STAMPED_SCAN), false);
+});
+
+test('a plain scan carries no marks at all', () => {
+    assert.equal(isBornDigital({ visibleGlyphs: 0, pathMarks: 0 }), false);
+});
+
+test('a page of prose over a full-bleed image is vetoed', () => {
+    // The measured brochure: 3 pages, a background photograph covering the page,
+    // 25 lines of real text drawing 1250 glyphs. Before the veto this came out
+    // as the photograph and nothing else.
+    assert.equal(isBornDigital({ visibleGlyphs: 1250, pathMarks: 0 }), true);
+});
+
+test('a wordless drawing over a full-bleed image is vetoed too', () => {
+    // What the glyph count alone misses: a page whose own content is vector, not
+    // text — a chart, a diagram, a table's rules. The photograph behind it wins
+    // every ranking rule, so without a second signal the drawing is dropped.
+    assert.equal(isBornDigital({ visibleGlyphs: 0, pathMarks: 60 }), true);
+});
+
+test('either kind of mark is enough on its own', () => {
+    // The two signals cover different pages, so they must not be required
+    // together — an `&&` here would pass both tests above and veto neither of
+    // the pages they describe.
+    assert.equal(isBornDigital({ visibleGlyphs: 1250, pathMarks: 4 }), true, 'text');
+    assert.equal(isBornDigital({ visibleGlyphs: 100, pathMarks: 60 }), true, 'vector');
+});
+
+// `readPageMarks`, the walk that produces those counts and the images alongside
+// them.
+//
+// It takes its operator codes as an argument, so these tests write operator
+// lists under codes of their own and never stand up pdf.js. What the real codes
+// are is pdf.js's business and lives in the function's default; what the walk
+// does with them is here.
+//
+// The tally and the CTM share one graphics-state stack, which is the thing worth
+// testing: the text rendering mode is graphics state, so `q`/`Q` puts it back,
+// and getting that wrong counts an OCR layer as drawn text and vetoes every
+// OCR'd scan in existence — the whole class of document this app is for.
+
+const OPS = {
+    save: 1, restore: 2, transform: 3,
+    setTextRenderingMode: 4, showText: 5, showSpacedText: 6,
+    paintImageXObject: 7, fill: 8, stroke: 9,
+    // in the table, so the set is built, but never used by a test below
+    closeStroke: 10, eoFill: 11, fillStroke: 12, eoFillStroke: 13,
+    closeFillStroke: 14, closeEOFillStroke: 15, shadingFill: 16,
+    // an operator the walk has no interest in
+    setFont: 17,
+};
+
+// An operator list, written as [op, args] pairs
+function opList(pairs) {
+    return {
+        fnArray: pairs.map(([fn]) => fn),
+        argsArray: pairs.map(([, args]) => args ?? null),
+    };
+}
+
+// A show-text argument: `count` glyphs, with a spacing adjustment left among
+// them the way pdf.js leaves them in
+const glyphs = (count) => [...Array(count).fill({ unicode: 'x' }), -250];
+
+const marks = (pairs) => readPageMarks(opList(pairs), OPS);
+
+test('visible text is counted and invisible text is not', () => {
+    const drawn = marks([[OPS.showText, [glyphs(10)]]]);
+    assert.equal(drawn.visibleGlyphs, 10, 'mode defaults to fill, which is visible');
+
+    for (const mode of [3, 7]) {
+        const hidden = marks([
+            [OPS.setTextRenderingMode, [mode]],
+            [OPS.showText, [glyphs(10)]],
+        ]);
+        assert.equal(hidden.visibleGlyphs, 0, `mode ${mode} puts down no ink`);
+    }
+});
+
+test('the spacing adjustments in a show-text argument are not glyphs', () => {
+    // `showSpacedText` arrives as one flat array with the TJ numbers still in it.
+    // Counting the array's length instead would inflate every page — and a page
+    // of tightly kerned text most of all.
+    const { visibleGlyphs } = marks([[OPS.showSpacedText, [glyphs(30)]]]);
+    assert.equal(visibleGlyphs, 30);
+});
+
+test('an invisible text layer stays invisible after the mode is restored', () => {
+    // The bug this exists for: `Q` restores the text rendering mode, so a scan
+    // whose OCR layer sits inside a q/Q — which is how a producer keeps it from
+    // leaking into the rest of the page — has visible text before and after it
+    // and invisible text within. A walk that let the mode leak out of the frame
+    // would count the OCR layer, veto the page, and quietly stop cleaning the
+    // one kind of document this app exists for.
+    const { visibleGlyphs } = marks([
+        [OPS.showText, [glyphs(5)]],          // a stamped page number
+        [OPS.save],
+        [OPS.setTextRenderingMode, [3]],
+        [OPS.showText, [glyphs(2000)]],       // the OCR layer
+        [OPS.restore],
+        [OPS.showText, [glyphs(5)]],          // still visible, mode restored
+    ]);
+    assert.equal(visibleGlyphs, 10);
+});
+
+test('path-painting operators are counted and path construction is not', () => {
+    const { pathMarks } = marks([
+        [OPS.fill], [OPS.stroke], [OPS.fill],
+        [OPS.setFont, [['g_d0', 12]]],   // not a mark
+    ]);
+    assert.equal(pathMarks, 3);
+});
+
+test('an image is reported with the matrix in force where it was painted', () => {
+    // The images and the counts come off one walk over one list, so the stack
+    // that serves the text tally is the same one that places the images. This is
+    // the pairing that keeps them honest about each other.
+    const { images, visibleGlyphs } = marks([
+        [OPS.save],
+        [OPS.transform, [200, 0, 0, 300, 10, 20]],
+        [OPS.paintImageXObject, ['img_1', 1000, 1500]],
+        [OPS.restore],
+        [OPS.paintImageXObject, ['img_2', 10, 10]],
+        [OPS.showText, [glyphs(3)]],
+    ]);
+    assert.equal(images.length, 2);
+    assert.deepEqual(images[0], {
+        imageName: 'img_1', sourceWidth: 1000, sourceHeight: 1500,
+        matrix: [200, 0, 0, 300, 10, 20],
+    });
+    assert.deepEqual(images[1].matrix, [1, 0, 0, 1, 0, 0], 'restored to the identity');
+    assert.equal(visibleGlyphs, 3);
+});
+
+test('a page that paints nothing reports nothing', () => {
+    assert.deepEqual(marks([]), { images: [], visibleGlyphs: 0, pathMarks: 0 });
+});
+
+// `totalCoverage` and `renderScale`, the two figures behind the composite path.
+//
+// A scanner that cuts a page into strips used to defeat this file completely: no
+// strip covers enough of the page to be a candidate, so the page read as having
+// no scan on it, and a document of such pages read as not being a scan — handed
+// back with only its metadata touched, and nothing said about why. These are the
+// arithmetic that says otherwise.
+
+// A page's scan cut into `count` strips stacked up the page, each at `dpi`
+function strips(count, dpi = 300) {
+    const height = PORTRAIT_HEIGHT / count;
+    return Array.from({ length: count }, (unused, i) => ({
+        imageName: `img_${i}`,
+        sourceWidth: Math.round((dpi * PORTRAIT_WIDTH) / 72),
+        sourceHeight: Math.round((dpi * height) / 72),
+        matrix: [PORTRAIT_WIDTH, 0, 0, height, 0, i * height],
+    }));
+}
+
+test('strips of a scan add up to a page', () => {
+    // Eight strips, none of which could be a candidate on its own
+    const eight = strips(8);
+    for (const strip of eight) {
+        assert.equal(pick([strip]), null, 'no single strip is a candidate');
+    }
+    assert.ok(totalCoverage(eight, PAGE_AREA) > 0.99, 'and together they are a page');
+});
+
+test('a page of small decorations does not add up to one', () => {
+    const decorations = Array.from({ length: 6 }, (unused, i) =>
+        painted({ name: `img_${i}`, coverage: 0.006 }));
+    assert.ok(totalCoverage(decorations, PAGE_AREA) < 0.05);
+});
+
+test('coverage is measured against the page, not in absolute units', () => {
+    // The same reason `MIN_PAGE_COVERAGE` is a fraction: an A6 page and an A0 page
+    // have to answer this the same way
+    const eight = strips(8);
+    assert.ok(Math.abs(totalCoverage(eight, PAGE_AREA) - 1) < 0.01, 'A4');
+    const huge = eight.map((strip) => ({
+        ...strip,
+        matrix: strip.matrix.map((n) => n * 4),
+    }));
+    assert.ok(Math.abs(totalCoverage(huge, PAGE_AREA * 16) - 1) < 0.01, 'four times over');
+});
+
+test('an unmeasurable page covers nothing rather than dividing by zero', () => {
+    assert.equal(totalCoverage(strips(8), 0), 0);
+});
+
+test('a composite is rendered at the resolution its pieces were stored at', () => {
+    // Rendering below it throws away detail that is in the file; above it invents
+    // pixels. 300dpi is a scale of 300/72 on the page's own points.
+    const scale = renderScale(strips(8, 300), PORTRAIT_WIDTH, PORTRAIT_HEIGHT, 1e9);
+    assert.ok(Math.abs(scale - 300 / 72) < 0.02, `got ${scale}`);
+});
+
+test('the pixel budget caps the render, since the downscale would undo it anyway', () => {
+    const budget = 1000;
+    const scale = renderScale(strips(8, 1200), PORTRAIT_WIDTH, PORTRAIT_HEIGHT, budget);
+    assert.ok(Math.abs(scale * PORTRAIT_HEIGHT - budget) < 1,
+        'the long edge lands on the budget');
+});
+
+test('the finest piece sets the resolution, not the last one seen', () => {
+    const mixed = [...strips(4, 100), ...strips(4, 400)];
+    const scale = renderScale(mixed, PORTRAIT_WIDTH, PORTRAIT_HEIGHT, 1e9);
+    assert.ok(Math.abs(scale - 400 / 72) < 0.02, `got ${scale}`);
+});
+
+test('a page whose images state no size still renders, at its own points', () => {
+    // Dropping to a scale of 0 would be an empty canvas — a page lost to a
+    // missing number
+    const sizeless = strips(4).map((strip) => ({ ...strip, sourceWidth: 0, sourceHeight: 0 }));
+    assert.equal(renderScale(sizeless, PORTRAIT_WIDTH, PORTRAIT_HEIGHT, 1e9), 1);
 });

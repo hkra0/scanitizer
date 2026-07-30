@@ -461,7 +461,9 @@ async function firstPageImage(session) {
         );
         return image || null;
     }
-    const images = await extractImages(session.pdf, { limit: 1, keepSource: true });
+    const images = await extractImages(session.pdf, {
+        limit: 1, keepSource: true, pdfBytes: session.buffer,
+    });
     return (images && images.length) ? images[0] : null;
 }
 
@@ -786,7 +788,9 @@ function readAsArrayBuffer(file) {
 async function runPdf({ pdf, buffer }) {
     try {
         const removedFields = await sourceMetadataFields(pdf);
-        const imgs = await extractImages(pdf, { onProgress: reporter(t.extracting) });
+        const imgs = await extractImages(pdf, {
+            pdfBytes: buffer, onProgress: reporter(t.extracting),
+        });
 
         if (imgs === false) {
             // Not a scan: leave the pages alone and only strip the metadata.

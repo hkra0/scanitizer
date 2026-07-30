@@ -18,6 +18,7 @@ export let JSZip = null;
 
 export let PDFDocument = null;
 export let PDFName = null;
+export let PDFDict = null;
 export let PDFNumber = null;
 export let PDFString = null;
 export let PDFHexString = null;
@@ -96,6 +97,7 @@ export const pdfLibReady = scriptReady('lib-pdflib', 'PDFLib').then((ok) => {
     ({
         PDFDocument,
         PDFName,
+        PDFDict,
         PDFNumber,
         PDFString,
         PDFHexString,

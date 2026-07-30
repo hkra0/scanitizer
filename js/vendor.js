@@ -24,6 +24,12 @@ export let PDFString = null;
 export let PDFHexString = null;
 export let PDFOperator = null;
 export let PDFOperatorNames = null;
+// The object model below the page: `pdf/strip.js` edits pages in place rather
+// than rebuilding them, so it needs to tell a reference from an inline object
+// and to get at a content stream's decoded bytes.
+export let PDFRef = null;
+export let PDFRawStream = null;
+export let decodePDFRawStream = null;
 
 /**
  * Resolves true once `window[globalName]` is there, false if the tag failed.
@@ -103,6 +109,9 @@ export const pdfLibReady = scriptReady('lib-pdflib', 'PDFLib').then((ok) => {
         PDFHexString,
         PDFOperator,
         PDFOperatorNames,
+        PDFRef,
+        PDFRawStream,
+        decodePDFRawStream,
     } = PDFLib);
     return true;
 });

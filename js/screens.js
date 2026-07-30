@@ -506,6 +506,21 @@ function reportLines(report) {
         if (!report.rebuilt) {
             lines.push(() => termText(t.reportUntouched, 'tl-dim tl-sub'));
         }
+        // Only the pages-kept path can say this: a rebuilt page lost every
+        // annotation it had as a side effect of being rebuilt, so counting them
+        // there would be reporting on something nobody chose. A zero is still
+        // worth a line — the pass ran, and "nothing was found" is a different
+        // answer from "this was not looked at", which is what silence would mean
+        if (report.marks) {
+            lines.push(() => termText(
+                report.marks.annotations + report.marks.blocks
+                    ? t.reportMarks
+                        .replace('{a}', report.marks.annotations)
+                        .replace('{b}', report.marks.blocks)
+                    : t.reportNoMarks,
+                'tl-dim tl-sub',
+            ));
+        }
         lines.push(() => termText(
             report.removedFields.length
                 ? t.reportRemoved + ' ' + report.removedFields.join(', ')

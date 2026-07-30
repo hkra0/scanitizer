@@ -5,7 +5,7 @@
 import { t } from './i18n.js';
 import { pdfjsLib, PDFDocument, vendorReady, vendorState, canRaster } from './vendor.js';
 import { onSchemeChange } from './theme.js';
-import { keepText, pageLayout } from './settings.js';
+import { keepText, pageLayout, removeMarks } from './settings.js';
 import {
     METADATA_FIELDS,
     ETA_MIN_MS,
@@ -15,6 +15,7 @@ import {
 } from './config.js';
 import { extractImages } from './pdf/extract.js';
 import { createNewPdf, cleanSavePdf, sheetFor, pointsPerPixel } from './pdf/build.js';
+import { stripMarks } from './pdf/strip.js';
 import { processImageFiles } from './images.js';
 import { rasterize, closeBitmap } from './raster.js';
 import {
@@ -484,6 +485,17 @@ function sampleGeometry() {
     };
 }
 
+/**
+ * What the sample screen says will happen to a document with no page image.
+ *
+ * It has to name everything the run will do, not just the metadata: a screen
+ * that promises less than the output screen then reports reads as the tool
+ * having done something it was not asked for.
+ */
+function notScanNote() {
+    return removeMarks() ? t.notScanMarksNote : t.notScanNote;
+}
+
 function paintSample() {
     const image = state.sampleImage;
     sampleUpdate({
@@ -507,7 +519,7 @@ function paintSample() {
                 pageBytes: image.blob.size,
                 pageCount: sessionPageCount(state.session),
             })
-            : t.notScanNote,
+            : notScanNote(),
     });
 }
 
@@ -573,6 +585,11 @@ const sample = createSampleScheduler({
 function settingChanged(setting) {
     if (setting.affects === 'image') sample.refresh();
     else if (setting.affects === 'layout') sampleUpdate({ geometry: sampleGeometry() });
+    // Nothing about the page changes, only the sentence saying what the run
+    // will do to it — and only on the screen that has such a sentence to say
+    else if (setting.affects === 'note' && !state.sampleImage) {
+        sampleUpdate({ size: notScanNote() });
+    }
 }
 
 async function startSample() {
@@ -793,15 +810,25 @@ async function runPdf({ pdf, buffer }) {
         });
 
         if (imgs === false) {
-            // Not a scan: leave the pages alone and only strip the metadata.
+            // Not a scan: the pages are kept as they are, since rasterising a
+            // typeset page costs more than anything it could remove. What is
+            // taken off them is the metadata and — with the setting on — the
+            // annotations and watermark blocks, which come away without the
+            // page being rebuilt.
+            //
             // The run carries on under the spinner and the explanation lands on
             // the output screen, where it stays. Saying it here instead would
             // hold the result back for as long as it took to read, to say
             // something the output screen says again anyway.
             checkpoint();
-            termUpdateProgress(t.saving);
             const originalPdfDoc = await PDFDocument.load(buffer);
-            finishProcessing(await saveCancellably(originalPdfDoc), null, true, { removedFields });
+            const marks = removeMarks()
+                ? stripMarks(originalPdfDoc, reporter(t.cleaning))
+                : null;
+            checkpoint();
+            termUpdateProgress(t.saving);
+            finishProcessing(await saveCancellably(originalPdfDoc), null, true,
+                { removedFields, marks });
         } else if (imgs.length === 0) {
             abortWith(t.noImages);
         } else {
@@ -846,10 +873,12 @@ async function runImages(files) {
  * screen because only this layer knows which path the file took; the screen is
  * handed facts and decides how to word them.
  *
- * @param source  { removedFields, sourceIsImages } — what the input was and
- *                what it was carrying
+ * @param source  { removedFields, sourceIsImages, marks } — what the input was
+ *                and what it was carrying. `marks` is the count from the
+ *                structural pass, or null when that pass did not run.
  */
-function buildReport(newPdfBlob, directDownload, { removedFields = [], sourceIsImages = false }) {
+function buildReport(newPdfBlob, directDownload,
+    { removedFields = [], sourceIsImages = false, marks = null }) {
     const rebuilt = !directDownload && state.pageCount > 0;
     // Page 1 stands in for the run: it is the page whose quality and resolution
     // the settings are judged on, and the only one worth the memory of a
@@ -872,6 +901,7 @@ function buildReport(newPdfBlob, directDownload, { removedFields = [], sourceIsI
         // that was never taken
         textKept: (rebuilt && !sourceIsImages) ? keepText() : null,
         removedFields,
+        marks,
         sourceIsImages,
         preview: first
             ? {

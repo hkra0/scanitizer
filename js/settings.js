@@ -34,6 +34,8 @@ const STORAGE_KEY = 'scanitizer.settings';
  *   'image'   read by `rasterize` — changing it means encoding the page again
  *   'layout'  read by `sheetFor` — the pixels are unchanged and only the sheet
  *             around them moves, so the sample repaints without re-encoding
+ *   'note'    the page is untouched and only what the screen says about the run
+ *             changes, so the note under the sample is rewritten and no more
  *   null      nothing the sample can show
  *
  * It is recorded here rather than worked out at the call site because this is
@@ -54,6 +56,25 @@ export const SETTINGS = [
         values: [
             { id: 'off', label: t.off, value: false },
             { id: 'on', label: t.on, value: true },
+        ],
+    },
+    {
+        // On by default: taking the marks off is what the tool is for, and this
+        // is the only path on which a mark can survive at all — a rebuilt page
+        // has already lost every annotation it had. Off is here for the file
+        // whose annotations are the point, where a highlight is the reader's own
+        // work rather than something stamped on top of it.
+        id: 'removeMarks',
+        label: t.setMarks,
+        note: t.setMarksNote,
+        // It only ever applies to a document with no page image, so there is no
+        // page for it to change — only the line under the sample saying what
+        // the run is going to do
+        affects: 'note',
+        def: 'on',
+        values: [
+            { id: 'on', label: t.on, value: true },
+            { id: 'off', label: t.off, value: false },
         ],
     },
     {
@@ -186,6 +207,14 @@ export function pageLayout() {
 /** Whether the source text should be re-drawn on top of the page images. */
 export function keepText() {
     return valueOf('keepText');
+}
+
+/**
+ * Whether a document that is not a scan should have its annotations and
+ * watermark-marked content taken out as well as its metadata.
+ */
+export function removeMarks() {
+    return valueOf('removeMarks');
 }
 
 export function rasterLimits() {

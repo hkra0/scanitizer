@@ -9,7 +9,10 @@ Notes:
 - For scanned PDF with OCR text, the text is dropped by default; `keep original
   text layer` under `[s]` puts it back. See
   [Keeping the text layer](#keeping-the-text-layer).
-- For non-scanned PDF, only metadata is removed.
+- For non-scanned PDF the pages are kept as they are, and the metadata, the
+  annotations and the watermark-marked content come off them. `remove marks
+  from non-scans` under `[s]` turns the second part off. See
+  [Cleaning a page that is not a scan](#cleaning-a-page-that-is-not-a-scan).
 - A file is processed one page first, not all of it: the sample screen shows
   page 1 on the sheet it will land on, with the settings under it and an
   estimate of what the whole file will weigh. `[enter]` runs the rest. See
@@ -63,6 +66,8 @@ js/
   pdf/
     matrix.js       2D affine matrix helpers shared by extract and textlayer
     preflight.js    what each page holds, from the object dictionaries alone
+    tokens.js       a scanner for content streams, reporting byte ranges
+    strip.js        take the watermarks and markup off a page, in place
     extract.js      pull the page-sized scan image out of each PDF page
     textlayer.js    re-draw the source text, invisibly, over the page images
     build.js        assemble page images into a clean PDF
@@ -71,6 +76,8 @@ test/
   geometry.test.mjs    page geometry: what the sample screen and the builder share
   page-image.test.mjs  which image on a page is the scan of it
   preflight.test.mjs   what the object dictionaries alone are allowed to decide
+  tokens.test.mjs      where a content-stream token ends, in the awkward cases
+  strip.test.mjs       which parts of a page count as a watermark
   browser-globals.mjs  the few globals the pure modules touch on the way in
 ```
 
@@ -95,6 +102,7 @@ on, there was no way back at all.
 | setting | values | default |
 | --- | --- | --- |
 | keep original text layer | off, on | off |
+| remove marks from non-scans | on, off | on |
 | paper size | a4, letter, legal, a3, a5, fit image | a4 |
 | orientation | auto, portrait, landscape | auto |
 | page margin | 0–40 pt | 20 pt |
@@ -230,6 +238,77 @@ concludes — a cover page is exactly the page that would mislead it.
 `[enter]` passes straight through, so a run that needed no decision pays one
 page and one keypress for the one that did.
 
+## Cleaning a page that is not a scan
+
+The extractor's answer to a watermark is to throw the page away and keep the
+pixels. That works because on a scan the pixels *are* the page. On a typeset
+document they are not — the text, the fonts and the vectors are the document,
+and rasterising them to get rid of a stamp costs far more than the stamp did. So
+a file that is not a scan used to leave with nothing removed but its metadata.
+
+`pdf/strip.js` is the other answer: take the marks off the page and leave the
+page. Nothing is re-encoded, nothing is resampled, and every byte that is not
+part of a mark is the byte that was there before. It is deliberately narrow — it
+only removes what it can name, and everything it cannot read it leaves alone.
+Three rules, in order of how sure they are:
+
+1. **Annotations that are markup.** A highlight, a sticky note, a freehand
+   scribble and Acrobat's own watermark are all annotations: objects hanging off
+   the page rather than part of it, which is why they come away without the page
+   being touched at all. The rule is stated as what survives — `Link`, which is
+   how the document navigates, and `Widget`, which is a form field and would
+   take the field with it — because the list of markup subtypes is long and
+   open-ended, and a subtype nobody enumerated is far likelier to be another
+   kind of markup than another kind of link.
+2. **Content marked as a watermark artifact.** The PDF spec has a way to say
+   "this is a watermark and not the document" — `/Artifact <</Subtype
+   /Watermark>> BDC … EMC` — and the tools that stamp files use it. An artifact
+   that says anything else, `/Pagination` for a page number, stays.
+3. **Semi-transparent blocks.** A document does not draw itself at 30% opacity;
+   something stamped over it does. This is the rule that catches the watermarks
+   nobody labelled, and it is the least certain of the three, so it is also the
+   one the guard below is really for.
+
+Every cut is made at a boundary that restores itself — a `q`/`Q` pair or a
+`BDC`/`EMC` span — so removing one cannot change how anything after it is drawn.
+A rule with no such boundary to cut at, a `gs` sitting at the top level of the
+stream, declines to cut anything rather than guess: deleting it on its own would
+leave the rest of the page drawn under whatever state preceded it.
+
+What this does **not** catch is worth saying plainly. An opaque, unlabelled
+watermark drawn as ordinary page content is indistinguishable from the page's
+own content by any of these rules and survives. So does anything already burnt
+into a bitmap — that is a pixel problem and this is nowhere near it.
+
+### Cutting bytes rather than rebuilding
+
+`pdf/tokens.js` scans a content stream and reports where each token *starts and
+ends in the original bytes*; the cuts are then spliced out of those same bytes.
+It deliberately does not parse into a tree and re-serialise. A round trip
+through a parser would have to reproduce every number's precision, every
+string's escaping and every name's `#` encoding to come back byte-identical, and
+anywhere it failed to would be a page subtly wrong for a reason unrelated to
+watermarks. Splicing cannot go subtly wrong: the parts that are not cut are
+untouched.
+
+The awkward part of the scan is the inline image. `BI … ID … EI` is the one
+construct in a content stream that is not tokens, and its data may hold any byte
+sequence at all — including bytes that read as `q` and `Q`. Scanned past
+naively it contributes imaginary blocks and wrecks the nesting every cut
+boundary depends on, so the whole span is claimed as a single token.
+
+Two things then keep a bad reading out of the file. A page whose content stream
+will not decode is handed back untouched rather than rewritten shorter, and a
+page whose rules match more than nine tenths of its own content stream is handed
+back untouched as well: "I appear to have found that the entire page is a
+watermark" is much more likely to be a misread stream than a true finding.
+
+Removed objects are deleted, not merely unhooked. An annotation left in the file
+but referenced by nothing is still in the file — the note's text, the scribble's
+path and the watermark's appearance stream all still there, invisible to a
+reader and perfectly visible to anyone who looks at the bytes. A tool whose
+whole claim is that things were removed cannot leave them in.
+
 ## The output screen
 
 The cleanup is lossy on purpose — pages come out as re-encoded JPEGs — so the
@@ -246,8 +325,10 @@ screen that reports it shows the result rather than asserting it:
   is quite often positive: a scan whose source images were already compressed
   harder than the current settings comes out *bigger*, and that is exactly the
   case a "done ✓" alone would hide.
-- that the file was not a scan and its pages were left alone, on the
-  metadata-only path only. That they were *rebuilt* goes unsaid: the figure above
+- that the file was not a scan and its pages were kept, on the pages-kept path
+  only, and under it how many annotations and watermark blocks came off them —
+  a zero included, because "nothing was found" is a different answer from "this
+  was not looked at", which is what silence would have meant. That they were *rebuilt* goes unsaid: the figure above
   is the rebuilt page and the summary already counted them, so the line would
   have been reporting what the screen was showing.
 - what went wrong with a download, when one does. It stays on the screen: the
@@ -328,7 +409,7 @@ Node's own runner, no dependencies and no build — the same bargain the rest of
 the project makes. Needs Node 22.7 or newer, which is where `.js` files are
 detected as ES modules without a `package.json` to declare it.
 
-There are four of them, and the choice of what to cover is the point. These are
+There are six of them, and the choice of what to cover is the point. These are
 the places where being wrong produces a **plausible file rather than an error**:
 a text layer that lands off the page, a preview that disagrees with the PDF it
 promised, a scan mistaken for a watermark. Everything else in the app announces
@@ -369,6 +450,24 @@ at it than a test would be.
   established. Plus the trap in the repetition test — one scanner makes one size,
   so every page of a scan holds an image of identical dimensions, and counting
   sizes rather than objects would demote every page's own scan at once.
+
+- **`tokens.test.mjs`** — where a token ends, which sounds like nothing and is
+  the whole of it: the caller does not read these tokens so much as trust their
+  byte offsets, and an offset that is off by any amount splices the page apart
+  in the middle of something. So the cases are the ones where the end of a token
+  is not where a naive scan puts it — a string holding an escaped `)`, an
+  operator inside a string, a `Q` inside a comment, and above all an inline
+  image, whose binary data will sooner or later contain a byte that reads as
+  `q`.
+- **`strip.test.mjs`** — which parts of a page count as a watermark, weighted
+  towards what must *survive*. These are the most dangerous lines in the
+  project: everywhere else a mistake costs a page that looks worse than it
+  should, and here it costs content the user wanted, in a file they will not
+  think to check because the tool told them it only removed watermarks. So the
+  tests are mostly near misses — an artifact that is a page number rather than a
+  watermark, an opaque block, a graphics state the page never defined, a faint
+  state with no enclosing `q` to cut at — plus the guard that refuses a result
+  claiming the whole page was a watermark.
 
 The suite is checked against deliberate regressions rather than trusted because
 it is green: swapping the arguments to `multiplyMatrices`, reading `paintedSize`

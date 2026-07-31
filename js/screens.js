@@ -24,6 +24,7 @@ import {
     termBlock,
     termCaret,
     termOption,
+    focusDefault,
     termChoice,
     termPage,
     setPageGeometry,
@@ -266,11 +267,12 @@ export function renderInit({ selectFile, proceed, fileLabel, error }) {
         () => termGap(),
         () => {
             if (!fileLabel) {
-                termOption('enter', t.selectFile, selectFile, undefined, true);
+                focusDefault(termOption('enter', t.selectFile, selectFile));
                 termText(t.dropHint, 'tl-dim tl-sub');
                 return;
             }
-            const row = termOption('enter', t.proceed, proceed, undefined, true);
+            const row = termOption('enter', t.proceed, proceed);
+            focusDefault(row);
             row.classList.add('tl-row');
             setToggleState(row, { label: shortName(fileLabel), cls: 'tl-dim', wrap: ['', ''] });
             termOption('f', t.changeFile, selectFile);
@@ -452,7 +454,7 @@ export function renderSampleScreen({
         () => termText(t.settings + ':'),
         () => fillSettings(termBlock(), onSettingChange),
         () => termGap(),
-        () => termOption('enter', proceedLabel, onProceed, undefined, true),
+        () => focusDefault(termOption('enter', proceedLabel, onProceed)),
         () => termOption('f', t.changeFile, onSelectFile),
         () => termOption('0', t.reset, onReset),
         () => termGap(),
@@ -619,7 +621,7 @@ export async function renderDone({ directDownload, pageCount, report, notice }, 
 
     if (directDownload) {
         lines.push(
-            () => { actions.setDoneMode('direct'); termOption('enter', t.download, actions.downloadPdf, undefined, true); },
+            () => { actions.setDoneMode('direct'); focusDefault(termOption('enter', t.download, actions.downloadPdf)); },
         );
     } else {
         // Each option downloads on the spot, so the header names the action;

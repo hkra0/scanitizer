@@ -273,9 +273,8 @@ export function setToggleState(el, state) {
 }
 
 // `key` may be null for rows the arrows reach but no shortcut names
-export function termOption(key, text, onClick, target, isDefault) {
+export function termOption(key, text, onClick, target) {
     const el = termLine('tl-option', target);
-    if (isDefault) el.classList.add('is-default');
     // A real focus stop: the arrow-key cursor below is a convenience on top of
     // this, not a replacement for it, so Tab and a screen reader reach every
     // option the mouse can
@@ -735,6 +734,14 @@ function markSelected(el) {
     document.body.classList.add('key-nav');
     if (document.activeElement !== el) el.focus({ preventScroll: true });
     revealSelection(el);
+}
+
+// Marks a row as the screen's default choice: selected and focused the moment
+// it is drawn, exactly as if the keyboard had just stepped onto it — so the
+// same rules decide when that goes away (a real hover elsewhere, an arrow
+// press, Escape).
+export function focusDefault(el) {
+    markSelected(el);
 }
 
 export function moveSelection(delta) {

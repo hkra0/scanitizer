@@ -146,6 +146,7 @@
    its row with `is-sel` instead, so touch highlights what was done, not what a
    swipe went over. */
 .tl-option.is-sel,
+.tl-option.is-default,
 body:not(.key-nav):not(.touch-input) .tl-option:hover {
     color: var(--accent);
 }
@@ -156,12 +157,15 @@ body:not(.key-nav):not(.touch-input) .tl-option:hover {
    again or the row highlights around a `[+]` that stays grey. */
 .tl-option.is-sel .tl-key,
 .tl-option.is-sel .tl-state,
+.tl-option.is-default .tl-key,
+.tl-option.is-default .tl-state,
 body:not(.key-nav):not(.touch-input) .tl-option:hover .tl-key,
 body:not(.key-nav):not(.touch-input) .tl-option:hover .tl-state {
     color: var(--accent);
 }
 
 .tl-option.is-sel .tl-cursor,
+.tl-option.is-default .tl-cursor,
 body:not(.key-nav):not(.touch-input) .tl-option:hover .tl-cursor {
     opacity: 1;
 }

@@ -273,8 +273,9 @@ export function setToggleState(el, state) {
 }
 
 // `key` may be null for rows the arrows reach but no shortcut names
-export function termOption(key, text, onClick, target) {
+export function termOption(key, text, onClick, target, isDefault) {
     const el = termLine('tl-option', target);
+    if (isDefault) el.classList.add('is-default');
     // A real focus stop: the arrow-key cursor below is a convenience on top of
     // this, not a replacement for it, so Tab and a screen reader reach every
     // option the mouse can

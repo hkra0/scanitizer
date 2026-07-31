@@ -180,14 +180,21 @@ export function openSettings() {
     settingsOpen = true;
 }
 
-// One row per setting, printed at once rather than line by line: a panel that
-// answers a keypress should be there by the time the eye gets to it.
+// Bumped whenever the panel folding shuts an animation still in flight lands
+// in, so a closed (or re-opened) box never sprouts rows meant for the run
+// before it — see `fold` in renderInit.
+let settingsVersion = 0;
+
+// One row per setting, staggered the same way the rest of a screen is: a
+// panel that just folded open reads as more of the terminal typing itself
+// out, rather than a block of text dropped in all at once.
 //
 // `onChange` is handed the setting that moved, not just the fact that something
 // did — the sample screen shows a page whose sheet and whose pixels come from
 // different halves of the pipeline, and only the setting itself says which of
 // them has to be redone.
-function fillSettings(box, onChange) {
+async function fillSettings(box, onChange) {
+    const myVersion = settingsVersion;
     for (const setting of SETTINGS) {
         let row;
         const paint = (value) => setToggleState(row, { label: value.label, wrap: ANGLE });
@@ -197,6 +204,8 @@ function fillSettings(box, onChange) {
         }, box);
         paint(currentValue(setting));
         if (setting.note) termText(setting.note, 'tl-dim tl-note', box);
+        await delay(TERM_DELAY);
+        if (settingsVersion !== myVersion) return;
     }
     termText(t.settingsHint, 'tl-dim tl-sub', box);
 }
@@ -239,6 +248,7 @@ export function renderInit({ selectFile, proceed, fileLabel, error }) {
         if (!box || open === settingsOpen) return;
         settingsOpen = open;
         paintHeader();
+        settingsVersion++;
         box.textContent = '';
         if (settingsOpen) fillSettings(box);
     };
@@ -256,11 +266,11 @@ export function renderInit({ selectFile, proceed, fileLabel, error }) {
         () => termGap(),
         () => {
             if (!fileLabel) {
-                termOption('enter', t.selectFile, selectFile);
+                termOption('enter', t.selectFile, selectFile, undefined, true);
                 termText(t.dropHint, 'tl-dim tl-sub');
                 return;
             }
-            const row = termOption('enter', t.proceed, proceed);
+            const row = termOption('enter', t.proceed, proceed, undefined, true);
             row.classList.add('tl-row');
             setToggleState(row, { label: shortName(fileLabel), cls: 'tl-dim', wrap: ['', ''] });
             termOption('f', t.changeFile, selectFile);
@@ -442,7 +452,7 @@ export function renderSampleScreen({
         () => termText(t.settings + ':'),
         () => fillSettings(termBlock(), onSettingChange),
         () => termGap(),
-        () => termOption('enter', proceedLabel, onProceed),
+        () => termOption('enter', proceedLabel, onProceed, undefined, true),
         () => termOption('f', t.changeFile, onSelectFile),
         () => termOption('0', t.reset, onReset),
         () => termGap(),
@@ -609,7 +619,7 @@ export async function renderDone({ directDownload, pageCount, report, notice }, 
 
     if (directDownload) {
         lines.push(
-            () => { actions.setDoneMode('direct'); termOption('enter', t.download, actions.downloadPdf); },
+            () => { actions.setDoneMode('direct'); termOption('enter', t.download, actions.downloadPdf, undefined, true); },
         );
     } else {
         // Each option downloads on the spot, so the header names the action;

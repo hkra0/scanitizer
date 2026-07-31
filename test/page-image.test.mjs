@@ -275,6 +275,10 @@ const OPS = {
     closeFillStroke: 14, closeEOFillStroke: 15, shadingFill: 16,
     // an operator the walk has no interest in
     setFont: 17,
+    // The path itself. Which of the two shapes below it takes is the pdf.js
+    // version's business; the walk has to read both.
+    constructPath: 18,
+    endPath: 19,
 };
 
 // An operator list, written as [op, args] pairs
@@ -336,6 +340,41 @@ test('path-painting operators are counted and path construction is not', () => {
         [OPS.setFont, [['g_d0', 12]]],   // not a mark
     ]);
     assert.equal(pathMarks, 3);
+});
+
+// pdf.js up to 4.x emits the path and then the operator that paints it; from
+// 5.7 it folds that operator into the path's own first argument and emits
+// nothing after it. Both have to count, and the reason is the asymmetry: reading
+// only the old shape on a newer pdf.js finds no path marks anywhere, which does
+// not fail — it silently retires half of `isBornDigital` and lets a wordless
+// designed page be rasterised down to its largest image and called a success.
+test('a path that carries its own paint operator is counted', () => {
+    const { pathMarks } = marks([
+        [OPS.constructPath, [OPS.fill, [], {}]],
+        [OPS.constructPath, [OPS.stroke, [], {}]],
+        [OPS.constructPath, [OPS.eoFill, [], {}]],
+    ]);
+    assert.equal(pathMarks, 3);
+});
+
+test('a path that paints nothing is not a mark, in either shape', () => {
+    // `endPath` is what a path that is only clipped carries
+    assert.equal(marks([[OPS.constructPath, [OPS.endPath, [], {}]]]).pathMarks, 0,
+        'folded shape');
+    // The old shape puts the construction steps in that argument instead. They
+    // are an array, not an operator, and must not be mistaken for one.
+    assert.equal(marks([[OPS.constructPath, [[13, 14, 14, 18], []]]]).pathMarks, 0,
+        'old shape constructs without painting');
+});
+
+test('the old shape still counts the operator that follows the path', () => {
+    const { pathMarks } = marks([
+        [OPS.constructPath, [[19], []]],
+        [OPS.fill],
+        [OPS.constructPath, [[19], []]],
+        [OPS.stroke],
+    ]);
+    assert.equal(pathMarks, 2, 'counted once each, not twice');
 });
 
 test('an image is reported with the matrix in force where it was painted', () => {

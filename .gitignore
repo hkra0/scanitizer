@@ -36,3 +36,8 @@ dist/
 build/
 *.tmp
 *.temp
+
+# The regression corpus is real documents — see test/corpus/README.md.
+# The README itself is kept; nothing else in there ever is.
+test/corpus/*
+!test/corpus/README.md

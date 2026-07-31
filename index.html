@@ -7,16 +7,64 @@
     <title>scanitizer</title>
     <meta name="description" content="Scanned PDF cleanup in the browser. Nothing is uploaded.">
 
+    <!-- The whole claim this tool makes is that the file never leaves the page.
+         Until now nothing enforced that but the code's own good behaviour; this
+         is the browser being told to enforce it. `default-src 'none'` denies
+         everything not named below, so the interesting directives are the two
+         that shut the exits: `connect-src` allows exactly one origin, which is
+         the CDN the libraries come from and is not somewhere a document could
+         be sent by accident, and `form-action 'none'` means no form can submit
+         anywhere at all. A compromised dependency could still misbehave inside
+         the page; what it could not do is get a file out of it.
+
+         The rest is the app's actual surface, and nothing beyond it:
+           script-src   our own modules, plus the CDN the three libraries and
+                        the pdf.js worker are pinned to. `blob:` is there because
+                        pdf.js ships only as an ES module now: js/vendor.js
+                        fetches it, checks it against its hash, and imports it
+                        from a blob, so the bytes that run are bytes that were
+                        verified first. `'wasm-unsafe-eval'` lets the worker
+                        instantiate the JPEG 2000 decoder it carries inline; it
+                        permits WebAssembly and nothing else — `eval` and
+                        `new Function` stay blocked.
+           worker-src   `blob:` for the worker js/vendor.js verifies and re-hosts
+                        as a blob, and the CDN for the fallback when that fetch
+                        fails
+           img-src      `blob:` for the page previews, which are object URLs of
+                        the images just produced. No `data:`, no remote images.
+           style-src    the two stylesheets, and no `'unsafe-inline'` — every
+                        style the app sets at runtime goes through the CSSOM
+                        (`el.style.x = …`), which this does not restrict. A
+                        `style` attribute in the markup would be blocked, which
+                        is why the file input is hidden from css/base.css.
+
+         `frame-ancestors` is deliberately absent: it is ignored in a meta tag
+         and has to be a real response header to mean anything. -->
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src 'self' blob: 'wasm-unsafe-eval' https://cdnjs.cloudflare.com;
+                 worker-src blob: https://cdnjs.cloudflare.com;
+                 connect-src https://cdnjs.cloudflare.com;
+                 style-src 'self';
+                 img-src blob:;
+                 base-uri 'none';
+                 form-action 'none'">
+
     <link rel="stylesheet" href="css/base.css">
     <link rel="stylesheet" href="css/terminal.css">
 
-    <!-- Third-party libraries, loaded as globals and picked up by js/vendor.js,
+    <!-- pdf-lib and JSZip, loaded as globals and picked up by js/vendor.js,
          which watches these tags by id and reports each one into the boot log.
          They are `async` so a slow CDN can't hold back the first paint: the
          page renders and the terminal draws its header while they are still in
          flight.
 
-         All four assets (these three plus the pdf.js worker in js/vendor.js)
+         pdf.js is not here. From version 4 it ships only as an ES module, which
+         a plain tag cannot turn into a global, so js/vendor.js fetches it — with
+         the same integrity guarantee, applied to `fetch` instead of to a tag —
+         and imports it. Its version and hashes live there, next to the worker's.
+
+         All four assets (these two, plus pdf.js and its worker in js/vendor.js)
          come from one origin, and every one is pinned with an SRI hash: a
          tampered or swapped file is refused by the browser rather than being
          handed our pages. Bump the hash whenever a version here changes — a
@@ -29,9 +77,6 @@
          page blank. It also re-injects the tags it took over, which is not
          something to hand SRI-pinned third-party code to. -->
     <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-    <script id="lib-pdfjs" async src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.10.111/pdf.js"
-        integrity="sha384-hPWOzdzzGESHvuwjQXU410pdrhU6LxPfeXLkWU0DJYApT04lwsOMl6xA32pAF0Io"
-        crossorigin="anonymous" referrerpolicy="no-referrer" data-cfasync="false"></script>
     <script id="lib-pdflib" async src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"
         integrity="sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI"
         crossorigin="anonymous" referrerpolicy="no-referrer" data-cfasync="false"></script>
@@ -43,8 +88,9 @@
 </head>
 
 <body>
-    <input type="file" id="fileInput" accept=".pdf,image/*,.jpg,.jpeg,.png,.webp,.bmp" multiple
-        style="display: none;" />
+    <!-- Hidden from css/base.css rather than with a `style` attribute, which the
+         CSP above forbids. -->
+    <input type="file" id="fileInput" accept=".pdf,image/*,.jpg,.jpeg,.png,.webp,.bmp" multiple />
 
     <!-- The wordmark is drawn out of half-block characters, which is a picture
          of the name rather than the name: read aloud it is three rows of "▀▄█".

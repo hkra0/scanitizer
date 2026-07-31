@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>scanitizer — regression over real files</title>
+
+    <!-- The app's own policy, so a run here also answers "does the pipeline
+         still work under the CSP". One difference, and it is deliberate:
+         `connect-src` allows `'self'` so the corpus button can read
+         test/corpus/. The app has no business fetching from its own origin and
+         does not; this page does, and it only ever reads. -->
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 script-src 'self' blob: 'wasm-unsafe-eval' https://cdnjs.cloudflare.com;
+                 worker-src blob: https://cdnjs.cloudflare.com;
+                 connect-src 'self' https://cdnjs.cloudflare.com;
+                 style-src 'self';
+                 img-src blob:;
+                 base-uri 'none';
+                 form-action 'none'">
+
+    <link rel="stylesheet" href="regression.css">
+
+    <script id="lib-pdflib" async src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"
+        integrity="sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI"
+        crossorigin="anonymous" referrerpolicy="no-referrer" data-cfasync="false"></script>
+    <script id="lib-jszip" async src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+        integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG"
+        crossorigin="anonymous" referrerpolicy="no-referrer" data-cfasync="false"></script>
+
+    <script type="module" src="regression.js" data-cfasync="false"></script>
+</head>
+
+<body>
+    <h1>regression over real files</h1>
+
+    <p class="blurb">
+        Runs the real pipeline — the same functions <code>app.js</code> calls — over
+        every PDF you pick, and compares the output with the input. Nothing is
+        uploaded and nothing is written to disk; each file is opened, cleaned in
+        memory, measured, and dropped.
+    </p>
+
+    <p class="blurb">
+        <strong>fail</strong> means the output lost something it should have kept:
+        a page, its geometry, its ink, its text, its navigation — or kept
+        something it should have lost. <strong>warn</strong> means a human should
+        look: usually text or ink that went at the same time as a watermark, which
+        is either the tool working or the tool overreaching, and only the file can
+        say which.
+    </p>
+
+    <div class="bar">
+        <button type="button" id="corpus" class="button">run test/corpus</button>
+        <label class="button">
+            pick PDFs
+            <input type="file" id="files" multiple accept=".pdf,application/pdf">
+        </label>
+        <label class="button">
+            pick a folder
+            <input type="file" id="folder" webkitdirectory directory>
+        </label>
+        <button type="button" id="stop" class="button">stop</button>
+        <button type="button" id="copy" class="button">copy JSON</button>
+        <span id="progress" class="progress"></span>
+    </div>
+
+    <p id="status" class="status">loading libraries…</p>
+    <p id="summary" class="summary"></p>
+
+    <div id="results"></div>
+</body>
+
+</html>

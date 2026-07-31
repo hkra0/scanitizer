@@ -103,7 +103,29 @@ function pathMarkOps(OPS) {
         OPS.fillStroke, OPS.eoFillStroke,
         OPS.closeFillStroke, OPS.closeEOFillStroke,
         OPS.shadingFill,
-    ]);
+        OPS.rawFillPath,
+    ].filter((op) => op !== undefined));
+}
+
+/**
+ * The paint operator a `constructPath` carries, when it carries one.
+ *
+ * pdf.js changed shape here between 4.x and 5.7: it used to emit the path and
+ * then the operator that paints it, as two entries, and now it folds the paint
+ * operator into `constructPath`'s first argument and emits nothing after it.
+ * Under the newer shape a set of paint operators matched against `fnArray`
+ * finds none of them, and `pathMarks` comes out zero on every page — which does
+ * not fail, it just quietly retires half of `isBornDigital`. A wordless designed
+ * page would then read as a scan and be rasterised down to its largest image,
+ * reported as a success.
+ *
+ * So both shapes are read. On the old one the first argument is the array of
+ * path-construction steps, which is not a number and matches no operator; on the
+ * new one it is the operator's own code. `endPath` appears there for a path that
+ * is only clipped, and paints nothing, so the same set decides both.
+ */
+function paintOpOf(args) {
+    return typeof args?.[0] === 'number' ? args[0] : undefined;
 }
 
 // Glyphs in a show-text operator's argument. pdf.js hands both `showText` and
@@ -151,6 +173,11 @@ export function readPageMarks(ops, OPS = pdfjsLib.OPS) {
         const { stack, currentMatrix, textMode, images } = state;
 
         if (markOps.has(fn)) {
+            return { ...state, pathMarks: state.pathMarks + 1 };
+        }
+        // The same question again, for the pdf.js versions that fold the answer
+        // into the path instead of emitting it separately
+        if (fn === OPS.constructPath && markOps.has(paintOpOf(args))) {
             return { ...state, pathMarks: state.pathMarks + 1 };
         }
 

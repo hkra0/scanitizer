@@ -67,11 +67,14 @@ js/
     matrix.js       2D affine matrix helpers shared by extract and textlayer
     preflight.js    what each page holds, from the object dictionaries alone
     tokens.js       a scanner for content streams, reporting byte ranges
-    strip.js        take the watermarks and markup off a page, in place
+    strip.js        take the watermarks and markup off a page and its forms
+    sweep.js        delete every object nothing points at any more
     extract.js      pull the page-sized scan image out of each PDF page
     textlayer.js    re-draw the source text, invisibly, over the page images
-    build.js        assemble page images into a clean PDF
+    build.js        assemble page images into a clean PDF, and clean what it saves
 test/
+  regression.html      run the real pipeline over real files and diff the result
+  corpus/              the files it runs on — gitignored, see its README
   matrix.test.mjs      the affine helpers, as the properties their callers rely on
   geometry.test.mjs    page geometry: what the sample screen and the builder share
   page-image.test.mjs  which image on a page is the scan of it
@@ -275,10 +278,29 @@ A rule with no such boundary to cut at, a `gs` sitting at the top level of the
 stream, declines to cut anything rather than guess: deleting it on its own would
 leave the rest of the page drawn under whatever state preceded it.
 
+Rules 2 and 3 also follow the page into its **form XObjects**, which is where a
+watermark usually turns out to be. A stamping tool stores the mark once, as a
+reusable fragment of content stream, and each page invokes it with a single `Do`
+— so the page's own stream holds nothing the rules can see, and everything they
+are looking for is inside the form. Forms are cleaned once per document rather
+than once per page, because one watermark form is what all five hundred pages
+share; rewriting it at its own reference is what cleans all of them at once.
+
+That case needs one thing relaxed. A watermark stamp is a fragment that is
+*entirely* watermark, and the guard below — which reads "all of this is a
+watermark" as evidence the rules misread the stream — would find the mark, be
+certain about it, and then decline to remove it. So inside a form the guard is
+lifted, but only for rule 2: `/Artifact <</Subtype /Watermark>>` is the file
+saying outright that this is not the document, and there is nothing left to
+second-guess. Rule 3 is a heuristic, and a heuristic that has concluded "all of
+it" is exactly what the guard was written for, form or not.
+
 What this does **not** catch is worth saying plainly. An opaque, unlabelled
 watermark drawn as ordinary page content is indistinguishable from the page's
-own content by any of these rules and survives. So does anything already burnt
-into a bitmap — that is a pixel problem and this is nowhere near it.
+own content by any of these rules and survives. So does an action hanging off a
+`Link` annotation, since legitimate links are hung the same way. So does
+anything already burnt into a bitmap — that is a pixel problem and this is
+nowhere near it.
 
 ### Cutting bytes rather than rebuilding
 
@@ -408,6 +430,30 @@ node --test "test/*.test.mjs"
 Node's own runner, no dependencies and no build — the same bargain the rest of
 the project makes. Needs Node 22.7 or newer, which is where `.js` files are
 detected as ES modules without a `package.json` to declare it.
+
+### Regression over real files
+
+The tests above cover the pure functions, which is where the rules live. They
+do not touch pdf-lib, and pdf-lib is where this app can damage a document:
+`pdf/strip.js` rewrites content streams in place and `pdf/sweep.js` deletes
+every object it judges unreachable. Both are correct against every file anyone
+here has written by hand, and hand-written files are not the ones that matter.
+
+`test/regression.html` runs the **real** pipeline — the same functions `app.js`
+calls — over a folder of real PDFs and compares each output with its input:
+page count, page geometry, ink per rendered page, text retention, and whether
+outlines, named destinations, page labels, form fields and the structure tree
+survived the sweep. Plus the other direction: that the metadata, the scripts and
+the attachments actually went.
+
+Put files in `test/corpus/`, list them, serve the repo, and open
+`test/regression.html`. See `test/corpus/README.md`. Nothing in that directory
+is committed — a regression corpus is documents.
+
+It cannot say an output is *right*. It can say the output still opens, still has
+its pages, still draws them, still carries its text and its navigation, and no
+longer carries what it was meant to lose — which is the set of ways this code is
+actually likely to be wrong.
 
 There are six of them, and the choice of what to cover is the point. These are
 the places where being wrong produces a **plausible file rather than an error**:

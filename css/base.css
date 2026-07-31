@@ -63,6 +63,14 @@
     border: 0;
 }
 
+/* The picker is driven entirely from the terminal — `[f]`, the options, and a
+   drop — so the input itself is never shown. It lives here rather than in a
+   `style` attribute because the CSP in index.html has no `'unsafe-inline'` for
+   styles, and an attribute is exactly what that forbids. */
+#fileInput {
+    display: none;
+}
+
 body {
     font-family: ui-monospace, 'SF Mono', 'Menlo', 'DejaVu Sans Mono', 'Consolas', 'Courier New', monospace;
     background-color: var(--bg);

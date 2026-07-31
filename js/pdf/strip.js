@@ -160,7 +160,9 @@ export function contentCuts(tokens, { alphaOf = () => null, propertySubtype = ()
                 return {
                     ...next,
                     blocks: blocks.slice(0, -1),
-                    cuts: block.cut ? [...cuts, { start: block.start, end: token.end }] : cuts,
+                    cuts: block.cut
+                        ? [...cuts, { start: block.start, end: token.end, rule: 'alpha' }]
+                        : cuts,
                 };
             }
 
@@ -196,7 +198,9 @@ export function contentCuts(tokens, { alphaOf = () => null, propertySubtype = ()
                 return {
                     ...next,
                     spans: spans.slice(0, -1),
-                    cuts: span.cut ? [...cuts, { start: span.start, end: token.end }] : cuts,
+                    cuts: span.cut
+                        ? [...cuts, { start: span.start, end: token.end, rule: 'artifact' }]
+                        : cuts,
                 };
             }
 
@@ -211,17 +215,40 @@ export function contentCuts(tokens, { alphaOf = () => null, propertySubtype = ()
 /**
  * The stream with its watermark blocks removed.
  *
+ * @param allowFullCut  let the rules take the whole stream, which `MAX_CUT_SHARE`
+ *                      otherwise forbids. For a form XObject, and only when
+ *                      every cut came from an explicit watermark label — see
+ *                      below.
  * @returns { bytes, blocks } — `bytes` is the input itself when nothing was
  *          removed, so the caller can tell "unchanged" by identity and skip
  *          writing the page back
+ *
+ * `MAX_CUT_SHARE` reads "the whole of this is a watermark" as evidence that the
+ * scan went wrong, which is right for a page and wrong for a form XObject: a
+ * watermark stamp *is* a fragment that is entirely watermark, and that is the
+ * commonest shape one comes in. Applying the page's guard there would mean
+ * finding the mark, being certain about it, and then declining to remove it.
+ *
+ * So the guard is lifted for forms — but only for cuts the file labelled
+ * itself. `/Artifact <</Subtype /Watermark>>` is the producer saying outright
+ * that this is not the document, and there is nothing to second-guess. The
+ * transparency rule is a heuristic about what faint drawing usually means, and
+ * a heuristic that has concluded "all of it" is exactly the case the guard was
+ * written for, form or not.
  */
-export function rewriteContent(bytes, lookups) {
-    const cuts = mergeRanges(contentCuts(tokenize(bytes), lookups));
+export function rewriteContent(bytes, lookups, { allowFullCut = false } = {}) {
+    // The share is judged on the raw cuts, before merging folds a labelled span
+    // and a guessed one into a single range with no rule left on it
+    const found = contentCuts(tokenize(bytes), lookups);
+    const cuts = mergeRanges(found);
     if (!cuts.length) return { bytes, blocks: 0 };
 
+    const labelledOnly = found.every((cut) => cut.rule === 'artifact');
+    const limit = allowFullCut && labelledOnly ? 1 : MAX_CUT_SHARE;
+
     const removed = cuts.reduce((n, cut) => n + (cut.end - cut.start), 0);
-    if (removed > bytes.length * MAX_CUT_SHARE) {
-        console.warn('Watermark rules matched nearly the whole page; leaving it alone');
+    if (removed > bytes.length * limit) {
+        console.warn('Watermark rules matched nearly the whole stream; leaving it alone');
         return { bytes, blocks: 0 };
     }
     return { bytes: applyCuts(bytes, cuts), blocks: cuts.length };
@@ -244,18 +271,18 @@ function nameOf(value) {
 }
 
 /**
- * The two resource lookups `contentCuts` needs, bound to one page.
+ * The two resource lookups `contentCuts` needs, bound to one resource
+ * dictionary — a page's, or a form XObject's own.
  *
- * A page with no readable resources gets lookups that answer null to
+ * A stream with no readable resources gets lookups that answer null to
  * everything, which costs the transparency and artifact rules their evidence
- * and leaves the page's content untouched. That is the right failure: this pass
- * may only remove what it has positively identified.
+ * and leaves the content untouched. That is the right failure: this pass may
+ * only remove what it has positively identified.
  */
-function resourceLookups(pageNode) {
+function resourceLookups(resources) {
     let extGState = null;
     let properties = null;
     try {
-        const resources = pageNode.Resources();
         extGState = resources?.lookupMaybe(PDFName.of('ExtGState'), PDFDict) || null;
         properties = resources?.lookupMaybe(PDFName.of('Properties'), PDFDict) || null;
     } catch {
@@ -279,13 +306,18 @@ function resourceLookups(pageNode) {
 }
 
 /**
- * Unhook every markup annotation from a page, and delete the objects.
+ * Unhook every markup annotation from a page.
  *
- * Deleting matters as much as unhooking. An annotation left in the file but
- * referenced by nothing is still in the file — the note's text, the scribble's
- * path and the watermark's appearance stream all still there, invisible to a
- * reader and perfectly visible to anyone who looks at the bytes. A tool whose
- * entire claim is that things were removed cannot leave them in.
+ * Unhooking is all that happens here. The objects themselves are not deleted,
+ * because an annotation may hang off more than one page and deleting it on
+ * behalf of this one would take it off the other — see `pdf/sweep.js`, which
+ * removes whatever is left unreachable once every page has been through. That
+ * an unhooked annotation must not simply be *left* in the file is not in
+ * question: the note's text, the scribble's path and the watermark's appearance
+ * stream would all still be there, invisible to a reader and perfectly visible
+ * to anyone who looks at the bytes. The sweep is what takes them, and it takes
+ * the appearance streams underneath them too, which deleting the annotation
+ * dictionary by hand never did.
  *
  * @returns how many went
  */
@@ -301,10 +333,6 @@ function stripAnnotations(pageNode, context) {
         return subtype === null || KEPT_ANNOTATIONS.has(subtype);
     });
     if (kept.length === entries.length) return 0;
-
-    entries
-        .filter((entry) => !kept.includes(entry) && entry instanceof PDFRef)
-        .forEach((ref) => context.delete(ref));
 
     if (kept.length) pageNode.set(PDFName.of('Annots'), context.obj(kept));
     else pageNode.delete(PDFName.of('Annots'));
@@ -355,28 +383,146 @@ function pageContent(pageNode, context) {
     return bytes;
 }
 
-// Every object reference `/Contents` reaches, so the streams that have been
-// replaced can be deleted rather than left orphaned in the file.
-function contentRefs(pageNode, context) {
-    const entry = pageNode.get(PDFName.of('Contents'));
-    const refs = entry instanceof PDFRef ? [entry] : [];
-    const contents = context.lookup(entry);
-    return typeof contents?.asArray === 'function'
-        ? [...refs, ...contents.asArray().filter((item) => item instanceof PDFRef)]
-        : refs;
+// === Form XObjects ===
+//
+// A watermark is very often not drawn by the page at all. The stamping tool
+// puts it in a form XObject — a reusable fragment of content stream, stored
+// once and invoked from each page with `Do` — and the page's own stream holds
+// nothing but that one operator. Everything this file looks for then lives
+// inside the form: the `/Artifact <</Subtype /Watermark>> BDC` that labels it,
+// or the `gs` that makes it faint.
+//
+// Reading only the page's stream therefore misses the whole of the commonest
+// way a watermark is applied, and misses it silently — the page parses, the
+// rules find nothing, the file is handed back with the stamp still on it and
+// reported as cleaned. (The cases where the *page* wraps the `Do` in the label
+// or the transparency were already caught, which is what made the gap easy to
+// miss: some stamped files did come out clean.)
+//
+// Forms are processed once per document rather than once per page, and for the
+// same reason they exist: one watermark form is shared by every page that
+// carries the mark. Rewriting it in place, at its own reference, is what makes
+// one edit clean all five hundred pages.
+
+// A form's own stream keys are carried across a rewrite, except the three that
+// describe the encoding — those belong to the bytes, which are about to change.
+const ENCODING_KEYS = new Set(['Length', 'Filter', 'DecodeParms', 'DL']);
+
+// Every form XObject a resource dictionary names, as [ref, stream] pairs.
+// Anything that will not resolve to a form stream is skipped rather than
+// guessed at.
+function formXObjects(resources, context) {
+    let xobjects = null;
+    try {
+        xobjects = resources?.lookupMaybe(PDFName.of('XObject'), PDFDict) || null;
+    } catch {
+        return [];
+    }
+
+    const forms = [];
+    for (const [, entry] of xobjects?.entries() ?? []) {
+        if (!(entry instanceof PDFRef)) continue;   // an inline form cannot be shared, or reassigned
+        const stream = context.lookup(entry);
+        if (!(stream instanceof PDFRawStream)) continue;
+        if (nameOf(stream.dict.get(PDFName.of('Subtype'))) !== 'Form') continue;
+        forms.push({ ref: entry, stream });
+    }
+    return forms;
 }
 
-/** Rewrite one page's content stream in place. @returns how many blocks went */
+/**
+ * Clean one form XObject, and everything it draws in turn.
+ *
+ * @param inherited  the resources to read when the form states none of its own,
+ *                   which the spec says are the invoking page's
+ * @param state      { reaches, blocks } shared across the document — `reaches`
+ *                   memoises the answer per form, so the second page to use a
+ *                   watermark form costs a map lookup rather than another parse
+ * @returns whether this form or anything under it had something taken out, so
+ *          the page that invoked it can be reported as cleaned even when the
+ *          work itself happened on an earlier page's turn
+ */
+function stripForm({ ref, stream }, context, inherited, state) {
+    // Set before the recursion below, so a form that reaches itself — malformed,
+    // but a file can say it — is answered rather than followed round for ever
+    if (state.reaches.has(ref.tag)) return state.reaches.get(ref.tag);
+    state.reaches.set(ref.tag, false);
+
+    let resources = inherited;
+    try {
+        resources = stream.dict.lookupMaybe(PDFName.of('Resources'), PDFDict) || inherited;
+    } catch {
+        // Unreadable; the invoker's resources stand
+    }
+
+    const nested = stripForms(resources, context, resources, state);
+
+    let own = false;
+    const bytes = decodeContentStream(stream);
+    if (bytes) {
+        const { bytes: rewritten, blocks } =
+            rewriteContent(bytes, resourceLookups(resources), { allowFullCut: true });
+        if (blocks) {
+            const carried = {};
+            stream.dict.entries().forEach(([key, value]) => {
+                const name = String(key).replace(/^\//, '');
+                if (!ENCODING_KEYS.has(name)) carried[name] = value;
+            });
+            // Reassigned at its own reference rather than registered as a new
+            // object: every page pointing at this form is meant to get the
+            // cleaned version, which is the whole point of it being shared
+            context.assign(ref, context.flateStream(rewritten, carried));
+            state.blocks += blocks;
+            own = true;
+        }
+    }
+
+    const touched = own || nested;
+    state.reaches.set(ref.tag, touched);
+    return touched;
+}
+
+/** Every form a resource dictionary reaches. @returns whether any was cleaned */
+function stripForms(resources, context, inherited, state) {
+    // `reduce` and not `some`: every form has to be visited, and `some` would
+    // stop at the first one that matched
+    return formXObjects(resources, context).reduce(
+        (touched, form) => stripForm(form, context, inherited, state) || touched,
+        false,
+    );
+}
+
+// A page's own resource dictionary, or null if it will not read.
+function pageResources(pageNode) {
+    try {
+        return pageNode.Resources() || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Rewrite one page's content stream in place.
+ *
+ * The page is pointed at a new stream and the old one is simply let go of. That
+ * is deliberate and it is the whole of the fix for the sharing problem: two
+ * pages may be drawn by one content stream, and this page's watermark is not
+ * necessarily the other page's. Pointing only this page at the rewritten bytes
+ * leaves the other page exactly as it was, still drawn by the original — which
+ * is the correct answer, not a compromise. The original is collected later if
+ * this page turns out to have been its only reader, and kept if it was not.
+ *
+ * @returns how many blocks went
+ */
 function stripContent(pageNode, context) {
     const bytes = pageContent(pageNode, context);
     if (!bytes) return 0;
 
-    const { bytes: rewritten, blocks } = rewriteContent(bytes, resourceLookups(pageNode));
+    const { bytes: rewritten, blocks } =
+        rewriteContent(bytes, resourceLookups(pageResources(pageNode)));
     if (!blocks) return 0;
 
-    const stale = contentRefs(pageNode, context);
     pageNode.set(PDFName.of('Contents'), context.register(context.flateStream(rewritten)));
-    stale.forEach((ref) => context.delete(ref));
     return blocks;
 }
 
@@ -390,20 +536,30 @@ function stripContent(pageNode, context) {
  *                    cancellation must not be.
  * @returns { annotations, blocks, pages } — what went, and how many pages had
  *          anything taken off them
+ *
+ * `blocks` counts each removal once, where it happened. A watermark form shared
+ * by five hundred pages is one block, not five hundred — it was stored once and
+ * it was cut once. `pages` still counts all five hundred, because every one of
+ * them had the mark and no longer does.
  */
 export function stripMarks(pdfDoc, onProgress) {
     const context = pdfDoc.context;
     const pages = pdfDoc.getPages();
+    // Carried across the whole document: a form is cleaned on the first page
+    // that invokes it and merely recognised on the rest
+    const forms = { reaches: new Map(), blocks: 0 };
 
-    return pages.reduce((total, page, index) => {
+    const totals = pages.reduce((total, page, index) => {
         onProgress?.(index + 1, pages.length);
         try {
             const annotations = stripAnnotations(page.node, context);
+            const resources = pageResources(page.node);
+            const inForms = stripForms(resources, context, resources, forms);
             const blocks = stripContent(page.node, context);
             return {
                 annotations: total.annotations + annotations,
                 blocks: total.blocks + blocks,
-                pages: total.pages + (annotations + blocks > 0 ? 1 : 0),
+                pages: total.pages + (annotations + blocks > 0 || inForms ? 1 : 0),
             };
         } catch (err) {
             // One page that will not be read is not a reason to abandon the
@@ -412,4 +568,8 @@ export function stripMarks(pdfDoc, onProgress) {
             return total;
         }
     }, { annotations: 0, blocks: 0, pages: 0 });
+
+    // The forms' own cuts happened outside the per-page tally, since they belong
+    // to the document rather than to whichever page reached them first
+    return { ...totals, blocks: totals.blocks + forms.blocks };
 }

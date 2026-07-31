@@ -1,0 +1,212 @@
+/* Deliberately plain. This is a diagnostic tool, and the only thing it has to
+   do well is make a failing row impossible to miss in a list of two hundred. */
+
+:root {
+    --bg: #0e0f11;
+    --fg: #d6d8dc;
+    --dim: #7d838d;
+    --line: #24262b;
+    --ok: #4a9e6a;
+    --warn: #c99a3a;
+    --fail: #d05a5a;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: #fbfbfc;
+        --fg: #1c1e22;
+        --dim: #6b7078;
+        --line: #e2e4e8;
+        --ok: #2f7d4f;
+        --warn: #96701f;
+        --fail: #b23c3c;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 24px;
+    max-width: 1100px;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, 'SF Mono', 'Menlo', 'DejaVu Sans Mono', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+h1 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px;
+}
+
+.blurb {
+    color: var(--dim);
+    max-width: 78ch;
+    margin: 0 0 10px;
+}
+
+code {
+    color: var(--fg);
+}
+
+.bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 18px 0 10px;
+}
+
+.button {
+    display: inline-block;
+    padding: 5px 12px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    cursor: pointer;
+}
+
+.button:hover {
+    border-color: var(--dim);
+}
+
+.button input {
+    display: none;
+}
+
+.progress,
+.status,
+.summary {
+    color: var(--dim);
+}
+
+.summary {
+    margin: 4px 0 16px;
+    color: var(--fg);
+}
+
+.row {
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+}
+
+.row.ok {
+    border-left-color: var(--ok);
+}
+
+.row.warn {
+    border-left-color: var(--warn);
+}
+
+.row.fail {
+    border-left-color: var(--fail);
+}
+
+.row.skip {
+    border-left-color: var(--dim);
+    opacity: 0.75;
+}
+
+.head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: baseline;
+}
+
+.badge {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+}
+
+.badge.ok {
+    color: var(--ok);
+}
+
+.badge.warn {
+    color: var(--warn);
+}
+
+.badge.fail {
+    color: var(--fail);
+}
+
+.badge.skip {
+    color: var(--dim);
+}
+
+.check.skip .k,
+.check.skip .v {
+    color: var(--dim);
+}
+
+.name {
+    font-weight: 600;
+    word-break: break-all;
+}
+
+.meta {
+    color: var(--dim);
+    font-size: 12px;
+}
+
+.checks {
+    margin-top: 6px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+}
+
+.check {
+    display: flex;
+    gap: 10px;
+    font-size: 12px;
+}
+
+.check .k {
+    flex: 0 0 11ch;
+    color: var(--dim);
+}
+
+.check.ok .k {
+    color: var(--ok);
+}
+
+.check.warn .k,
+.check.warn .v {
+    color: var(--warn);
+}
+
+.check.fail .k,
+.check.fail .v {
+    color: var(--fail);
+}
+
+.check .v {
+    min-width: 0;
+    word-break: break-word;
+}
+
+.check.note {
+    color: var(--dim);
+    font-style: italic;
+}
+
+/* The failing rows are the point, so they get the weight */
+.row.ok .checks {
+    display: none;
+}
+
+.row.ok:hover .checks {
+    display: grid;
+}

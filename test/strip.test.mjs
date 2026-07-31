@@ -164,3 +164,52 @@ test('a result that would take nearly the whole page is refused', () => {
     assert.equal(rewritten(source, alphas).blocks, 0);     // and is then declined
     assert.equal(rewritten(source, alphas).text, source);
 });
+
+// === The guard, lifted for a form XObject ===
+//
+// A watermark stamp is stored as a form and is *entirely* watermark, so the
+// page's "nearly all of it cannot be right" guard would find the mark, be
+// certain about it, and then decline to remove it. Lifting the guard is what
+// makes the form case work at all — and it is lifted only for cuts the file
+// labelled itself, because a heuristic that has concluded "all of it" is
+// precisely what the guard was written for.
+
+const asForm = (source, lookups) => {
+    const result = rewriteContent(bytes(source), lookups, { allowFullCut: true });
+    return { text: new TextDecoder().decode(result.bytes), blocks: result.blocks };
+};
+
+test('a form that is entirely a labelled watermark is removed whole', () => {
+    const source = '/Artifact <</Subtype /Watermark>> BDC q 1 0 0 1 0 0 cm (DRAFT) Tj Q EMC';
+    // As a page it is refused, exactly as before
+    assert.equal(rewritten(source, alphas).blocks, 0, 'page');
+    // As a form it goes, because the file said what it was
+    const form = asForm(source, alphas);
+    assert.equal(form.blocks, 1, 'form');
+    assert.equal(form.text.trim(), '', 'nothing of it is left');
+});
+
+test('a form that is entirely faint is still refused', () => {
+    // No label, only the transparency guess — the guard stands whatever the
+    // caller is willing to allow
+    const source = 'q /Faint gs BT (all of this form) Tj ET Q';
+    assert.equal(asForm(source, alphas).blocks, 0);
+    assert.equal(asForm(source, alphas).text, source);
+});
+
+test('a form is refused when a guess is mixed in with the label', () => {
+    // One labelled span and one faint block, together covering the whole
+    // stream. The label does not vouch for the guess.
+    const source = '/Artifact <</Subtype /Watermark>> BDC (DRAFT) Tj EMC\n' +
+        'q /Faint gs (something else) Tj Q';
+    assert.equal(asForm(source, alphas).blocks, 0);
+});
+
+test('a form keeps its content when only part of it is a watermark', () => {
+    const source = 'BT (the real fragment) Tj ET\n' +
+        '/Artifact <</Subtype /Watermark>> BDC (DRAFT) Tj EMC';
+    const form = asForm(source, alphas);
+    assert.equal(form.blocks, 1);
+    assert.match(form.text, /the real fragment/);
+    assert.doesNotMatch(form.text, /DRAFT/);
+});

@@ -425,6 +425,23 @@ async function openSession(files, current = () => true) {
         const loadingTask = pdfjsLib.getDocument({
             data: buffer.slice(0),
             disableFontFace: true,
+            // Every file this app opens is untrusted by definition — cleaning
+            // up documents of unknown provenance is the entire job. pdf.js
+            // compiles glyph outlines into a JS function and, left to itself,
+            // reaches for `eval` to do it; a font whose `FontMatrix` held
+            // source rather than numbers then ran in the page (CVE-2024-4367).
+            //
+            // The version pinned in vendor.js is past the fix, so this is no
+            // longer load-bearing — it is kept because the fix was a validation
+            // added in front of an `eval` that is still there, and this removes
+            // the `eval` instead. What it costs is the interpreted glyph path,
+            // which is slower per glyph and is reached only by `compositePage`.
+            //
+            // `disableFontFace: true` above is what makes that path the one in
+            // use at all, rather than handing the font to the browser as an
+            // `@font-face`. The option is gone in pdf.js 5.7+, where the eval
+            // was removed outright; drop this line if that upgrade ever lands.
+            isEvalSupported: false,
             verbosity: 0,
         });
         attachPasswordPrompt(loadingTask, () => { gaveUpOnPassword = true; }, current);

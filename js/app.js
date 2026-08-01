@@ -5,7 +5,7 @@
 import { t } from './i18n.js';
 import { pdfjsLib, PDFDocument, vendorReady, vendorState, canRaster } from './vendor.js';
 import { onSchemeChange } from './theme.js';
-import { keepText, pageLayout, removeMarks } from './settings.js';
+import { keepText, keepNonScans, pageLayout, removeMarks } from './settings.js';
 import {
     METADATA_FIELDS,
     ETA_MIN_MS,
@@ -13,8 +13,9 @@ import {
     PORTRAIT_HEIGHT,
     CSS_PX_PER_PT,
 } from './config.js';
-import { extractImages } from './pdf/extract.js';
-import { createNewPdf, cleanSavePdf, sheetFor, pointsPerPixel } from './pdf/build.js';
+import { extractImages, compositePage } from './pdf/extract.js';
+import { createNewPdf, cleanSavePdf, sheetFor, pointsPerPixel, keptPageNumbers } from './pdf/build.js';
+import { surveyDocument, imagelessPageCount } from './pdf/preflight.js';
 import { stripMarks } from './pdf/strip.js';
 import { processImageFiles } from './images.js';
 import { rasterize, closeBitmap } from './raster.js';
@@ -445,7 +446,13 @@ async function openSession(files, current = () => true) {
             verbosity: 0,
         });
         attachPasswordPrompt(loadingTask, () => { gaveUpOnPassword = true; }, current);
-        return { pdf: await loadingTask.promise, buffer };
+        const pdf = await loadingTask.promise;
+        // The cheap structural survey, so the sample screen can say whether
+        // some of the document's pages are not scans before the run decides
+        // what to do with them. Null is a fine answer: the sample simply has
+        // nothing to say.
+        const survey = await surveyDocument(buffer);
+        return { pdf, buffer, survey };
     } catch (err) {
         // A superseded pick has no screen to report to, and the rejection it is
         // reporting is usually one it caused itself by standing down
@@ -513,6 +520,24 @@ function notScanNote() {
     return removeMarks() ? t.notScanMarksNote : t.notScanNote;
 }
 
+/**
+ * What the sample screen adds when page 1 is a scan but the document also
+ * holds pages with no image on them.
+ *
+ * The preflight count is a lower bound — a laid-out page can carry a
+ * full-bleed picture and is invisible here, and the run may keep more pages
+ * than this says. It never keeps fewer, which is all a sentence about what
+ * will be kept may claim before the run has run.
+ */
+function mixedDocumentNote() {
+    const survey = state.session?.survey;
+    if (!survey || !state.sampleImage) return '';
+    const n = imagelessPageCount(survey);
+    if (n === 0) return '';
+    const note = keepNonScans() ? t.mixedNote : t.mixedNoteDrop;
+    return note.replace('{n}', n);
+}
+
 function paintSample() {
     const image = state.sampleImage;
     sampleUpdate({
@@ -537,6 +562,7 @@ function paintSample() {
                 pageCount: sessionPageCount(state.session),
             })
             : notScanNote(),
+        note: mixedDocumentNote(),
     });
 }
 
@@ -603,9 +629,12 @@ function settingChanged(setting) {
     if (setting.affects === 'image') sample.refresh();
     else if (setting.affects === 'layout') sampleUpdate({ geometry: sampleGeometry() });
     // Nothing about the page changes, only the sentence saying what the run
-    // will do to it — and only on the screen that has such a sentence to say
-    else if (setting.affects === 'note' && !state.sampleImage) {
-        sampleUpdate({ size: notScanNote() });
+    // will do to it. Which sentence is live depends on whether page 1 produced
+    // an image: without one the whole document may be a non-scan, with one the
+    // non-scan pages of a mixed document are the question.
+    else if (setting.affects === 'note') {
+        if (!state.sampleImage) sampleUpdate({ size: notScanNote() });
+        else sampleUpdate({ note: mixedDocumentNote() });
     }
 }
 
@@ -850,9 +879,48 @@ async function runPdf({ pdf, buffer }) {
             abortWith(t.noImages);
         } else {
             checkpoint();
+            // A scan that also holds non-scan pages keeps them: the scan pages
+            // are rebuilt and every other page is copied from the source as it
+            // was — with marks removed when the setting is on — so the output
+            // holds every page the input did. Dropping the pages extract.js
+            // skipped would be the quietest failure this app has, so it is not
+            // a path; it is a thrown error.
+            const nonScanned = keptPageNumbers(imgs, pdf.numPages);
+            // "keep non-scan pages" is the one setting that may change the
+            // output's page count, and only when the user asked for it — the
+            // screens name what the run then drops, so the difference is a
+            // decision rather than a silent one.
+            const keepThem = keepNonScans();
+            const kept = keepThem ? nonScanned : [];
+            const dropped = keepThem ? [] : nonScanned;
+            let sourceDoc = null;
+            let marks = null;
+            let firstPage = null;
+            if (kept.length) {
+                sourceDoc = await PDFDocument.load(buffer);
+                if (removeMarks()) marks = stripMarks(sourceDoc, reporter(t.cleaning));
+                // The output screen shows page 1. When page 1 is one of the
+                // kept pages, the first scan image would be the wrong page, so
+                // the kept page is rendered for the preview instead.
+                if (kept.includes(1)) {
+                    const page = await pdf.getPage(1);
+                    const bitmap = await compositePage(page, 1, pdfjsLib.AnnotationMode.DISABLE);
+                    firstPage = await rasterize(bitmap, { orient: false });
+                    closeBitmap(bitmap);
+                }
+            }
+            checkpoint();
             termUpdateProgress(t.saving);
-            const newPdf = await createNewPdf(imgs, reporter(t.processing));
-            finishProcessing(await saveCancellably(newPdf), imgs, false, { removedFields });
+            const newPdf = await createNewPdf(imgs, {
+                onProgress: reporter(t.processing), kept, dropped, sourceDoc,
+            });
+            finishProcessing(await saveCancellably(newPdf), imgs, false,
+                {
+                    removedFields, marks,
+                    kept: kept.length,
+                    dropped: dropped.length,
+                    firstPage,
+                });
         }
     } catch (err) {
         if (err === CANCELLED) {
@@ -873,7 +941,7 @@ async function runImages(files) {
         }
         checkpoint();
         termUpdateProgress(t.saving);
-        const newPdf = await createNewPdf(extracted, reporter(t.processing));
+        const newPdf = await createNewPdf(extracted, { onProgress: reporter(t.processing) });
         finishProcessing(await saveCancellably(newPdf), extracted, false, { sourceIsImages: true });
     } catch (err) {
         if (err === CANCELLED) {
@@ -895,12 +963,15 @@ async function runImages(files) {
  *                structural pass, or null when that pass did not run.
  */
 function buildReport(newPdfBlob, directDownload,
-    { removedFields = [], sourceIsImages = false, marks = null }) {
+    {
+        removedFields = [], sourceIsImages = false, marks = null,
+        kept = 0, dropped = 0, firstPage = null,
+    }) {
     const rebuilt = !directDownload && state.pageCount > 0;
     // Page 1 stands in for the run: it is the page whose quality and resolution
     // the settings are judged on, and the only one worth the memory of a
     // second decode
-    const first = rebuilt ? state.images[0] : null;
+    const first = firstPage ?? (rebuilt ? state.images[0] : null);
     if (first) state.previewUrl = URL.createObjectURL(first.blob);
     // The sheet this page actually landed on. Read now rather than when the
     // screen draws, because `createNewPdf` has just read the same settings and
@@ -917,6 +988,8 @@ function buildReport(newPdfBlob, directDownload,
         // setting says, so reporting the setting would be reporting a decision
         // that was never taken
         textKept: (rebuilt && !sourceIsImages) ? keepText() : null,
+        kept,
+        dropped,
         removedFields,
         marks,
         sourceIsImages,
@@ -945,7 +1018,10 @@ function finishProcessing(newPdfBlob, extractedImages, directDownload, source = 
     releasePreviewUrl();
     state.pdfUrl = URL.createObjectURL(newPdfBlob);
     state.pdfName = `${baseNameOf(state.fileName)}_c.pdf`;
-    state.pageCount = extractedImages ? extractedImages.length : 0;
+    // The count the summary reports is the output's, not the extraction's: a
+    // mixed document keeps its non-scan pages, so "N pages ready" must mean
+    // every page the input had.
+    state.pageCount = extractedImages ? extractedImages.length + (source.kept || 0) : 0;
     state.images = (!directDownload && state.pageCount > 0) ? extractedImages : null;
     state.report = buildReport(newPdfBlob, directDownload, source);
 

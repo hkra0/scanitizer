@@ -118,8 +118,22 @@ export function surveyPages(doc) {
  * @param giveUpAfter image-less pages the document is allowed
  */
 export function noScanPossible(pages, giveUpAfter) {
-    const imageless = pages.filter((page) => !page.opaque && page.images.length === 0);
-    return imageless.length >= giveUpAfter;
+    return imagelessPageCount(pages) >= giveUpAfter;
+}
+
+/**
+ * How many pages can be said, from the object dictionaries alone, to hold no
+ * image at all.
+ *
+ * This is the cheap half of the mixed-document count, and it is a lower bound
+ * on what a run will end up keeping: a laid-out page can hold a full-bleed
+ * image and is invisible here, but a page this cannot see an image on will not
+ * be rebuilt — `extract.js` may keep more pages, never fewer. A page whose
+ * resources could not be read (`opaque`) is never counted, for the same reason
+ * `noScanPossible` never votes against it.
+ */
+export function imagelessPageCount(pages) {
+    return pages.filter((page) => !page.opaque && page.images.length === 0).length;
 }
 
 /**

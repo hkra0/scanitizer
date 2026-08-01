@@ -1,4 +1,4 @@
-// User settings: text layer, page geometry and image compression.
+// User settings: page geometry, image compression and text layer.
 //
 // Every setting is a short list of values the user cycles through with the
 // left/right arrows, so a plain on/off option is just a two-value list and
@@ -43,40 +43,6 @@ const STORAGE_KEY = 'scanitizer.settings';
  * that goes stale the first time a setting moves.
  */
 export const SETTINGS = [
-    {
-        // Off by default: the recovered text comes straight from the source
-        // and, unlike the images, has not been through the cleanup
-        id: 'keepText',
-        label: t.keepText,
-        note: t.keepTextNote,
-        // An invisible layer drawn behind the pixels: nothing a sample of the
-        // page could show, whichever way it is set
-        affects: null,
-        def: 'off',
-        values: [
-            { id: 'off', label: t.off, value: false },
-            { id: 'on', label: t.on, value: true },
-        ],
-    },
-    {
-        // On by default: taking the marks off is what the tool is for, and this
-        // is the only path on which a mark can survive at all — a rebuilt page
-        // has already lost every annotation it had. Off is here for the file
-        // whose annotations are the point, where a highlight is the reader's own
-        // work rather than something stamped on top of it.
-        id: 'removeMarks',
-        label: t.setMarks,
-        note: t.setMarksNote,
-        // It only ever applies to a document with no page image, so there is no
-        // page for it to change — only the line under the sample saying what
-        // the run is going to do
-        affects: 'note',
-        def: 'on',
-        values: [
-            { id: 'on', label: t.on, value: true },
-            { id: 'off', label: t.off, value: false },
-        ],
-    },
     {
         id: 'paper',
         label: t.setPaper,
@@ -143,6 +109,59 @@ export const SETTINGS = [
             [2480, 3508],
         ].map(([w, h]) => ({ id: String(h), label: h + ' px', value: [w, h] })),
     },
+    {
+        // Off by default: the recovered text comes straight from the source
+        // and, unlike the images, has not been through the cleanup
+        id: 'keepText',
+        label: t.keepText,
+        note: t.keepTextNote,
+        // An invisible layer drawn behind the pixels: nothing a sample of the
+        // page could show, whichever way it is set
+        affects: null,
+        def: 'off',
+        values: [
+            { id: 'off', label: t.off, value: false },
+            { id: 'on', label: t.on, value: true },
+        ],
+    },
+    {
+        // On by default: a page that had no scan on it is still the document,
+        // and an output with fewer pages than the input reads as a failure
+        // even when the fewer pages are the point of the tool. Off is for the
+        // file whose non-scan pages are inserts or covers — a reader, a
+        // separator — where the run is asked to ship the scans alone.
+        id: 'keepNonScans',
+        label: t.keepNonScans,
+        note: t.keepNonScansNote,
+        // It changes what happens to whole pages, which the sample screen can
+        // say but cannot show — a non-scan page has no image to preview
+        affects: 'note',
+        def: 'on',
+        values: [
+            { id: 'on', label: t.on, value: true },
+            { id: 'off', label: t.off, value: false },
+        ],
+    },
+    {
+        // On by default: taking the marks off is what the tool is for, and this
+        // is the only path on which a mark can survive at all — a rebuilt page
+        // has already lost every annotation it had. Off is here for the file
+        // whose annotations are the point, where a highlight is the reader's own
+        // work rather than something stamped on top of it.
+        id: 'removeMarks',
+        label: t.setMarks,
+        note: t.setMarksNote,
+        // It applies to the pages a document keeps as they are — a document
+        // with no page image, or the non-scan pages of a mixed one — so there
+        // is no rebuilt page for it to change, only the lines the screens say
+        // about the run
+        affects: 'note',
+        def: 'on',
+        values: [
+            { id: 'on', label: t.on, value: true },
+            { id: 'off', label: t.off, value: false },
+        ],
+    },
 ];
 
 // { settingId: valueId }, one entry per setting, always a valid id
@@ -207,6 +226,16 @@ export function pageLayout() {
 /** Whether the source text should be re-drawn on top of the page images. */
 export function keepText() {
     return valueOf('keepText');
+}
+
+/**
+ * Whether the non-scan pages of a rebuilt document travel into the output.
+ *
+ * Off means the run deliberately produces fewer pages than the input, which
+ * is a decision the screens have to name — never a silent difference.
+ */
+export function keepNonScans() {
+    return valueOf('keepNonScans');
 }
 
 /**

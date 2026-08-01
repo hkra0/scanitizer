@@ -398,14 +398,29 @@ export function sampleEstimate({ pageBytes, pageCount }) {
  * @param geometry  { sheet: [w, h], margin }, in points
  * @param caption   the dim line under the sheet
  * @param size      the estimate line, or anything else worth saying there
+ * @param note      an optional dim line under it, shown only while it has
+ *                  something to say — the line is created on first use, so a
+ *                  document with nothing to report costs no row on the screen
  */
-export function sampleUpdate({ image, geometry, caption, size } = {}) {
+export function sampleUpdate({ image, geometry, caption, size, note } = {}) {
     const view = sampleLive();
     if (!view) return;
     if (image !== undefined) setPageImage(view.page, image);
     if (geometry !== undefined) setPageGeometry(view.page, geometry);
     if (caption !== undefined && view.caption) view.caption.textContent = caption;
     if (size !== undefined && view.size) view.size.textContent = size;
+    if (note !== undefined) {
+        if (!view.note) {
+            const line = document.createElement('div');
+            line.className = 'tl-dim tl-sub';
+            view.size?.insertAdjacentElement('afterend', line);
+            view.note = line;
+        }
+        if (view.note) {
+            view.note.textContent = note;
+            view.note.style.display = note ? '' : 'none';
+        }
+    }
 }
 
 /**
@@ -503,6 +518,19 @@ function reportLines(report) {
         // rest of the account stays dim
         () => termText(t.reportSize + '  ' + sizeLine(report), 'tl-sub'),
     ];
+
+    // The one fact that has no line anywhere else: a rebuilt document that
+    // also carried non-scan pages came back with them, as they were. Saying
+    // "277 pages ready" without it would read as 58 pages having gone.
+    if (report.kept) {
+        lines.push(() => termText(t.reportKept.replace('{n}', report.kept), 'tl-dim tl-sub'));
+    } else if (report.dropped) {
+        // The other half of the same decision: with "keep non-scan pages" off,
+        // the run deliberately produced a smaller document. That is a fact to
+        // print, not a thing to hide — the setting made the choice, the screen
+        // reports it.
+        lines.push(() => termText(t.reportDropped.replace('{n}', report.dropped), 'tl-dim tl-sub'));
+    }
 
     if (report.sourceIsImages) {
         // "Pages rebuilt as images" is not news about an image, so the one line

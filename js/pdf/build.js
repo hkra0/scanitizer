@@ -61,21 +61,79 @@ export function pointsPerPixel(imgWidth, imgHeight, layout) {
  * a uniform margin.
  *
  * @param extractedImages  [{ page, blob, width, height, texts }]
- * @param onProgress       (current, total) => void
+ * @param options.onProgress  (current, total) => void
+ * @param options.kept     1-based page numbers that had no scan on them and
+ *                         are to be carried into the output as original pages.
+ * @param options.dropped  1-based page numbers the caller is deliberately
+ *                         leaving out — the other half of the same decision.
+ *                         A page that is neither rebuilt, nor carried, nor
+ *                         named here is a hard error: the builder refuses to
+ *                         lose a page no one asked it to lose.
+ * @param options.sourceDoc  a pdf-lib PDFDocument to copy the kept pages from.
+ *                         Required whenever `kept` is non-empty; without it a
+ *                         page would have to be dropped, which no caller may
+ *                         do silently.
  *
  * With the text-layer setting on, the source text items travel with the image
  * and are re-drawn invisibly on top of it. Pages that carried no text simply
  * contribute nothing.
+ *
+ * The output keeps the source's page order: scan pages are rebuilt from their
+ * images, and every other page is copied from the source as it was, so a
+ * document that mixes scans and laid-out pages comes back complete. A page
+ * that is neither rebuilt nor copied is a hard error — the one failure this
+ * builder is not allowed to have is a smaller document that still reports as
+ * a success.
  */
-export async function createNewPdf(extractedImages, onProgress) {
+export async function createNewPdf(
+    extractedImages,
+    { onProgress, kept = [], dropped = [], sourceDoc = null } = {},
+) {
     const pdfDoc = await PDFDocument.create();
     const layout = pageLayout();
     const withText = keepText();
     const margin = layout.margin;
     extractedImages.sort((a, b) => a.page - b.page);
 
-    for (const img of extractedImages) {
-        onProgress?.(img.page, extractedImages.length);
+    // One pass in source order, so the kept pages land exactly where the
+    // source had them. `byPage` makes the scan lookup constant regardless of
+    // where in the document the scans sit.
+    const byPage = new Map(extractedImages.map((img) => [img.page, img]));
+    const keptSet = new Set(kept);
+    const droppedSet = new Set(dropped);
+    const lastPage = Math.max(
+        ...extractedImages.map((img) => img.page),
+        ...(kept.length ? kept : [0]),
+    );
+    let copied = null;
+
+    for (let pageNumber = 1; pageNumber <= lastPage; pageNumber++) {
+        const img = byPage.get(pageNumber);
+        if (!img) {
+            // A page with no scan on it travels into the output as an original
+            // page; the caller may instead name it as deliberately dropped. A
+            // page that is neither is a gap nobody accounted for, and gaps are
+            // not a path — they are the quiet failure this builder exists to
+            // make loud.
+            if (keptSet.has(pageNumber)) {
+                if (!sourceDoc) {
+                    throw new Error(`page ${pageNumber} has no image and no source page to copy`);
+                }
+                // Copied lazily, and only once: pdf-lib's copyPages walks the
+                // source's object graph, which is the expensive part of carrying a
+                // page over. A document with several kept pages pays it once.
+                // `copyPages` wants the source's zero-based indices; `kept` is
+                // 1-based, the way page numbers are spoken everywhere else
+                copied ??= await pdfDoc.copyPages(sourceDoc, kept.map((p) => p - 1));
+                const index = kept.indexOf(pageNumber);
+                pdfDoc.insertPage(pdfDoc.getPageCount(), copied[index]);
+                onProgress?.(pageNumber, lastPage);
+                continue;
+            }
+            if (droppedSet.has(pageNumber)) continue;
+            throw new Error(`page ${pageNumber} has no image and no source page to copy`);
+        }
+
         const arrayBuffer = await img.blob.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
         const pdfImage = img.blob.type === 'image/jpeg'
@@ -101,9 +159,31 @@ export async function createNewPdf(extractedImages, onProgress) {
         if (withText) {
             drawTextLayer(pdfDoc, page, img.texts, [scaledWidth, 0, 0, scaledHeight, x, y]);
         }
+        onProgress?.(pageNumber, lastPage);
     }
     if (withText) finalizeTextLayer(pdfDoc);
     return pdfDoc;
+}
+
+/**
+ * The pages a scan extraction skipped, as 1-based page numbers.
+ *
+ * `extractImages` counts a page with no scan on it as evidence about the
+ * document, which is how a mixed document is classified — but the pages
+ * themselves are not evidence, they are the document. Callers that rebuild a
+ * scan must hand every number this returns back to the builder, or the output
+ * silently loses pages.
+ *
+ * @param extractedImages  [{ page }] — the pages that did hold a scan
+ * @param numPages         the whole document's page count
+ */
+export function keptPageNumbers(extractedImages, numPages) {
+    const scanned = new Set(extractedImages.map((img) => img.page));
+    const kept = [];
+    for (let page = 1; page <= numPages; page++) {
+        if (!scanned.has(page)) kept.push(page);
+    }
+    return kept;
 }
 
 /**

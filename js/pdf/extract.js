@@ -527,7 +527,7 @@ async function decodedImage(page, candidate) {
  *
  * The caller owns the bitmap.
  */
-async function compositePage(page, scale, annotationMode) {
+export async function compositePage(page, scale, annotationMode) {
     const viewport = page.getViewport({ scale, rotation: 0 });
     const canvas = new OffscreenCanvas(
         Math.max(1, Math.ceil(viewport.width)),
@@ -575,6 +575,14 @@ async function compositePage(page, scale, annotationMode) {
  * @returns  an array of page images — each with a `texts` array holding the
  *           page's text items in image-normalized coordinates — or `false` if
  *           this is not a scanned PDF
+ *
+ *           The array is not the document: a page that had no scan on it is
+ *           counted, not returned. A caller that ships the result must place
+ *           every missing page itself (`build.keptPageNumbers` names them) or
+ *           the output will have fewer pages than the input and no one will
+ *           have said so. This module treats those pages as evidence about the
+ *           document's classification; dropping them from the output is the
+ *           caller's decision, and the builder refuses to make it silently.
  * @throws   if a page that holds a scan cannot be turned into one. A page that
  *           has no scan on it is evidence about the document and is counted; a
  *           page whose scan could not be decoded or encoded is a failure, and

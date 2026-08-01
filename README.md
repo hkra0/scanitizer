@@ -13,6 +13,11 @@ Notes:
   annotations and the watermark-marked content come off them. `remove marks
   from non-scans` under `[s]` turns the second part off. See
   [Cleaning a page that is not a scan](#cleaning-a-page-that-is-not-a-scan).
+- A document that mixes scans with laid-out pages keeps both: the scans are
+  rebuilt from their images and the rest are carried into the output as they
+  were, so the result has as many pages as the file it came from. `keep non-scan
+  pages` under `[s]` turns the keeping off — the run then ships the scans alone,
+  and the screens say which pages it left out.
 - A file is processed one page first, not all of it: the sample screen shows
   page 1 on the sheet it will land on, with the settings under it and an
   estimate of what the whole file will weigh. `[enter]` runs the rest. See
@@ -104,13 +109,13 @@ on, there was no way back at all.
 
 | setting | values | default |
 | --- | --- | --- |
-| keep original text layer | off, on | off |
-| remove marks from non-scans | on, off | on |
 | paper size | a4, letter, legal, a3, a5, fit image | a4 |
 | orientation | auto, portrait, landscape | auto |
 | page margin | 0–40 pt | 20 pt |
 | jpeg quality | 50–95% | 70% |
 | max page pixels | 1754–3508 px on the long edge | 2732 px |
+| keep original text layer | off, on | off |
+| remove marks from non-scans | on, off | on |
 
 Each default is what the app did before there were settings, so an untouched
 install is unchanged. `auto` turns the sheet to match the image, which is what

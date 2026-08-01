@@ -37,6 +37,10 @@ that are *hard to preserve*, not things that are easy:
   just present. Expect `warn` on these: text and ink going at the same time as
   a mark is the tool working, and only the file can say whether it took the
   right thing.
+- **Mixed documents** — a scan that also contains born-digital pages. The
+  harness fails a rebuilt file whose page count changed — the failure a mixed
+  document used to pass as a success — unless `keep non-scan pages` was
+  switched off, in which case the drop is checked as the configured behaviour.
 - **Anything that has ever come out wrong.** A corpus earns its keep by
   accumulating the awkward cases, not by being large.
 

@@ -22,9 +22,9 @@
 
 import { pdfjsLib, PDFDocument, PDFName, PDFDict, vendorReady } from '../js/vendor.js';
 import { extractImages } from '../js/pdf/extract.js';
-import { createNewPdf, cleanSavePdf } from '../js/pdf/build.js';
+import { createNewPdf, cleanSavePdf, keptPageNumbers } from '../js/pdf/build.js';
 import { stripMarks } from '../js/pdf/strip.js';
-import { removeMarks, keepText, pageLayout } from '../js/settings.js';
+import { removeMarks, keepText, keepNonScans, pageLayout } from '../js/settings.js';
 
 // Rendering every page of every file twice is the slow part, and past a point
 // it stops telling us anything new — a document that is going to be damaged is
@@ -187,8 +187,36 @@ async function clean(buffer) {
         }
         if (images.length === 0) return { path: 'no-images', blob: null };
 
-        const doc = await createNewPdf(images);
-        return { path: 'rebuilt', pageCount: images.length, blob: await cleanSavePdf(doc) };
+        // The same mixed-document handling app.js performs: pages with no scan
+        // on them travel into the rebuilt output as original pages (with marks
+        // removed when the setting is on), so the harness is testing the
+        // pipeline the app actually runs. If the two ever disagree about the
+        // kept pages, this is the check that notices.
+        // "keep non-scan pages" is the one setting that may shrink the output,
+        // and only by the pages it names. Off is a decision the harness must
+        // recognise rather than report as a bug.
+        const keep = keepNonScans();
+        const kept = keep ? keptPageNumbers(images, pdf.numPages) : [];
+        const dropped = keep ? [] : keptPageNumbers(images, pdf.numPages);
+        let sourceDoc = null;
+        let marks = null;
+        if (kept.length) {
+            sourceDoc = await PDFDocument.load(buffer);
+            if (removeMarks()) marks = stripMarks(sourceDoc);
+        }
+        const doc = await createNewPdf(images, { kept, dropped, sourceDoc });
+        return {
+            path: 'rebuilt',
+            // The pages the builder was asked to produce: the scans it rebuilt
+            // plus the pages it carried over, which is what the output must
+            // hold.
+            pageCount: images.length + kept.length,
+            kept: kept.length,
+            keptPages: kept,
+            keep,
+            marks,
+            blob: await cleanSavePdf(doc),
+        };
     } finally {
         await pdf.destroy();
     }
@@ -322,22 +350,64 @@ function keptChecks(before, after, beforeStruct, afterStruct, marks) {
  * that image was a background or a watermark the page arrives empty. It is the
  * one failure in this whole app that is reported as a success.
  */
-function rebuiltChecks(before, after, expectedPages) {
+function rebuiltChecks(before, after, expectedPages, keptPages = [], marks = null, keep = true) {
     const n = Math.min(before.pages.length, after.pages.length);
     let blanked = null;
     for (let i = 0; i < n && !blanked; i++) {
         if ((before.pages[i].ink ?? 0) > 0.01 && (after.pages[i].ink ?? 0) < INK_BLANK) blanked = i + 1;
     }
 
-    return [
+    const checks = [
         after.numPages === expectedPages
             ? ok('page count', String(after.numPages))
-            : fail('page count', `${expectedPages} extracted → ${after.numPages} in file`),
+            : fail('page count', `${expectedPages} expected → ${after.numPages} in file`),
+        // The invariant a rebuilt file is judged on first: whatever the
+        // pipeline did to the pages, the output must still hold all of them.
+        // Fewer pages than the input is a dropped document, and a dropped
+        // document is not a smaller one — it is the failure this harness
+        // exists to name. The one exception is the setting that says to drop
+        // non-scan pages, which is checked below instead.
+        after.numPages === before.numPages
+            ? ok('all pages', `${before.numPages} in → ${after.numPages} out`)
+            : keep
+                ? fail('all pages', `input ${before.numPages} pages → output ${after.numPages} — pages lost`)
+                : after.numPages === expectedPages
+                    ? ok('pages dropped', `${before.numPages - after.numPages} non-scan pages dropped as configured`)
+                    : fail('all pages', `input ${before.numPages} pages → output ${after.numPages}`),
         after.renderError ? fail('renders', after.renderError) : ok('renders'),
         blanked
             ? fail('not blank', `p${blanked} had ink and came back empty — page probably not a scan`)
             : ok('not blank'),
     ];
+
+    // Pages that were copied rather than rebuilt must still sit where the
+    // source had them, still draw, and still say what they said. Only the
+    // pages this harness measured (the first MAX_PAGES_CHECKED) are compared,
+    // like every other before/after check here.
+    if (keptPages.length) {
+        const moved = [];
+        const blank = [];
+        const textLost = [];
+        for (const pageNumber of keptPages) {
+            const i = pageNumber - 1;
+            if (i >= n) continue;
+            const b = before.pages[i];
+            const a = after.pages[i];
+            if (b.view.join() !== a.view.join()) moved.push(`p${pageNumber}`);
+            if ((b.ink ?? 0) > 0.01 && (a.ink ?? 0) < INK_BLANK) blank.push(`p${pageNumber}`);
+            if (b.text && !a.text) textLost.push(`p${pageNumber}`);
+        }
+        checks.push(moved.length
+            ? fail('kept pages', `moved out of place: ${moved.join(', ')}`)
+            : ok('kept pages', `${keptPages.length} kept at their places`));
+        if (blank.length) checks.push(fail('kept pages', `went blank: ${blank.join(', ')}`));
+        checks.push(textLost.length
+            ? (marks && (marks.blocks || marks.annotations)
+                ? warn('kept text', `lost with marks removed — ${textLost.slice(0, 3).join(', ')}`)
+                : fail('kept text', `lost with nothing removed — ${textLost.slice(0, 3).join(', ')}`))
+            : ok('kept text'));
+    }
+    return checks;
 }
 
 // === One file ===
@@ -366,6 +436,7 @@ async function checkFile(file) {
         const result = await clean(buffer);
         row.path = result.path;
         row.marks = result.marks;
+        row.kept = result.kept;
 
         if (!result.blob) {
             row.checks.push(warn('produced output', 'no page image could be extracted'));
@@ -389,7 +460,9 @@ async function checkFile(file) {
         if (result.path === 'kept') {
             row.checks.push(...keptChecks(before, after, beforeStruct, afterStruct, result.marks));
         } else {
-            row.checks.push(...rebuiltChecks(before, after, result.pageCount));
+            row.checks.push(...rebuiltChecks(
+                before, after, result.pageCount, result.keptPages, result.marks, result.keep,
+            ));
         }
         row.checks.push(...cleanlinessChecks(after, afterStruct));
 
@@ -433,6 +506,7 @@ function renderRow(row) {
             row.path,
             `${(row.size / 1024).toFixed(0)} KB${row.outSize ? ` → ${(row.outSize / 1024).toFixed(0)} KB` : ''}`,
             row.objects ? `objects ${row.objects}` : '',
+            row.kept ? `kept ${row.kept}p` : '',
             row.marks ? `marks ${row.marks.annotations}a/${row.marks.blocks}b/${row.marks.pages}p` : '',
             `${row.ms} ms`,
         ].filter(Boolean).join('  ·  ')),
@@ -486,6 +560,7 @@ async function run(files) {
 function settingsLine() {
     const layout = pageLayout();
     return `remove marks: ${removeMarks() ? 'on' : 'OFF — strip.js is not being exercised'}` +
+        `  ·  keep non-scan pages: ${keepNonScans() ? 'on' : 'OFF — non-scan pages will be dropped'}` +
         `  ·  keep text: ${keepText() ? 'on' : 'off'}` +
         `  ·  paper: ${layout.paper ? layout.paper.join('x') : 'fit'}`;
 }

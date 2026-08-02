@@ -20,7 +20,7 @@ import { stripMarks } from './pdf/strip.js';
 import { processImageFiles } from './images.js';
 import { rasterize, closeBitmap } from './raster.js';
 import {
-    saveUrl,
+    saveFile,
     downloadImages,
     downloadZip,
     baseNameOf,
@@ -60,7 +60,7 @@ const state = {
     stage: 'booting',
     session: null,      // the opened source — see below
     doneMode: null,     // 'direct' (PDF only) | 'format' (pdf/images/zip)
-    pdfUrl: null,       // object URL of the cleaned PDF
+    pdfBlob: null,      // the cleaned PDF, held until it is saved
     pdfName: null,
     images: null,       // page images, when the source was a scan
     pageCount: 0,
@@ -272,11 +272,8 @@ function showDone(directDownload, notice = null) {
     });
 }
 
-function releasePdfUrl() {
-    if (state.pdfUrl) {
-        URL.revokeObjectURL(state.pdfUrl);
-        state.pdfUrl = null;
-    }
+function releasePdf() {
+    state.pdfBlob = null;
 }
 
 // The thumbnail's URL outlives the screen that showed it — the output screen is
@@ -292,7 +289,7 @@ function releasePreviewUrl() {
 // back to the settings throws the result away and keeps the file — the whole
 // point of going back is to run the same source again.
 function discardResult() {
-    releasePdfUrl();
+    releasePdf();
     state.images = null;
     state.pdfName = null;
     state.pageCount = 0;
@@ -337,8 +334,8 @@ function reset({ keepFile = false } = {}) {
 // === Downloads ===
 
 function downloadPdf() {
-    if (!state.pdfUrl) return;
-    saveUrl(state.pdfUrl, state.pdfName);
+    if (!state.pdfBlob) return;
+    saveFile(state.pdfBlob, state.pdfName);
 }
 
 async function downloadAsImages() {
@@ -1014,9 +1011,9 @@ function finishProcessing(newPdfBlob, extractedImages, directDownload, source = 
         return;
     }
 
-    releasePdfUrl();
+    releasePdf();
     releasePreviewUrl();
-    state.pdfUrl = URL.createObjectURL(newPdfBlob);
+    state.pdfBlob = newPdfBlob;
     state.pdfName = `${baseNameOf(state.fileName)}_c.pdf`;
     // The count the summary reports is the output's, not the extraction's: a
     // mixed document keeps its non-scan pages, so "N pages ready" must mean

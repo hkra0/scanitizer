@@ -4,19 +4,36 @@
 import { JSZip, jszipReady } from './vendor.js';
 import { DOWNLOAD_INTERVAL, URL_LIFETIME } from './config.js';
 
-export function saveUrl(url, name) {
+/**
+ * A blob URL handed to a `download` click — the browser's own download, straight
+ * to wherever it puts downloads, no dialog.
+ *
+ * `download` is only a hint: a blob URL carrying a type the browser can render
+ * (a PDF above all) is opened in a tab instead by several of them. Re-typing the
+ * bytes as an opaque stream leaves nothing to render, so the download is the
+ * only thing left to do. The name still carries the real extension, which is
+ * what decides the file's type once it has landed.
+ */
+function saveViaAnchor(blob, name) {
+    const url = URL.createObjectURL(
+        new Blob([blob], { type: 'application/octet-stream' }),
+    );
     const a = document.createElement('a');
     a.href = url;
     a.download = name;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
     a.click();
-}
-
-function saveBlob(blob, name) {
-    const url = URL.createObjectURL(blob);
-    saveUrl(url, name);
+    a.remove();
     // Revoking synchronously kills the download before it starts in Firefox
     // and some WebKit builds, so let the click settle first
     setTimeout(() => URL.revokeObjectURL(url), URL_LIFETIME);
+}
+
+/** One finished file, downloaded. */
+export function saveFile(blob, name) {
+    saveViaAnchor(blob, name);
 }
 
 export function pageFileName(baseName, index) {
@@ -35,7 +52,7 @@ export function baseNameOf(fileName) {
 export async function downloadImages(images, baseName, onProgress) {
     for (let i = 0; i < images.length; i++) {
         onProgress?.(i + 1, images.length);
-        saveBlob(images[i].blob, pageFileName(baseName, i));
+        saveViaAnchor(images[i].blob, pageFileName(baseName, i));
         await new Promise((r) => setTimeout(r, DOWNLOAD_INTERVAL));
     }
 }
@@ -60,5 +77,5 @@ export async function downloadZip(images, baseName, onProgress) {
     const zipBlob = await zip.generateAsync({ type: 'blob' }, (meta) => {
         onProgress?.(Math.round(meta.percent), 100);
     });
-    saveBlob(zipBlob, `${baseName}_images.zip`);
+    saveViaAnchor(zipBlob, `${baseName}_images.zip`);
 }

@@ -490,6 +490,11 @@ function giveUpThreshold(numPages) {
  * already settled, and the decode that resolves these runs loose from the
  * operator list's own promise, so without the wait a big image is a thrown error
  * on every page.
+ *
+ * `bitmap` is not always an ImageBitmap: where the browser has WebCodecs
+ * `ImageDecoder`, pdf.js decodes through it and what comes back is a VideoFrame.
+ * Both draw the same, and `raster.js` knows how to measure either — nothing
+ * here should read `.width` off one directly.
  */
 async function decodedImage(page, candidate) {
     // A globally cached image's pixels are in the document-wide store, not this

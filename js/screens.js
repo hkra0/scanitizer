@@ -8,6 +8,8 @@ import { REPO_URL, TERM_DELAY } from './config.js';
 import { LOGO, LOGO_C, LOGO_C_END } from './logo.js';
 import { DEPENDENCIES } from './vendor.js';
 import { SETTINGS, currentValue, cycle } from './settings.js';
+import { totalPageCount, renderPdfPageThumbnail, canCollapsePdf } from './arrange.js';
+import { parsePageRange } from './pagerange.js';
 import {
     delay,
     termHeaderTarget,
@@ -623,7 +625,7 @@ function previewLines(preview) {
  *                        thing to be told once. The same reasoning `abortWith`
  *                        applies to a failed run.
  * @param actions         { onStart, setDoneMode, downloadPdf, downloadImages,
- *                          downloadZip, changeSettings, reset }
+ *                          downloadZip, changeSettings, reset, onPageRangeChange }
  */
 export async function renderDone({ directDownload, pageCount, report, notice }, actions) {
     termStopSpinner();
@@ -646,6 +648,44 @@ export async function renderDone({ directDownload, pageCount, report, notice }, 
         ...(report ? reportLines(report) : []),
         () => termGap(),
     ];
+
+    if (pageCount > 1) {
+        lines.push(() => {
+            const wrap = termLine('tl-range-container');
+            const input = termInput(t.pageRangeLabel, {
+                type: 'text',
+                onSubmit: () => {
+                    if (directDownload) actions.downloadPdf();
+                    else actions.downloadPdf();
+                },
+            }, wrap);
+            input.placeholder = `1-${pageCount}`;
+
+            const statusEl = document.createElement('span');
+            statusEl.className = 'tl-range-status valid';
+            statusEl.textContent = `✓ ${t.pageRangeAll} (${pageCount})`;
+            wrap.appendChild(statusEl);
+
+            input.addEventListener('input', () => {
+                const val = input.value.trim();
+                const res = parsePageRange(val, pageCount);
+                if (res.valid) {
+                    statusEl.className = 'tl-range-status valid';
+                    statusEl.textContent = res.isAll
+                        ? `✓ ${t.pageRangeAll} (${pageCount})`
+                        : `✓ ${t.pageRangeSelected.replace('{}', String(res.pages.length))}`;
+                    actions.onPageRangeChange?.(val, res);
+                } else {
+                    statusEl.className = 'tl-range-status invalid';
+                    statusEl.textContent = res.error === 'out_of_range'
+                        ? `! ${t.pageRangeOutOfRange.replace('{}', String(pageCount))}`
+                        : `! ${t.pageRangeInvalid}`;
+                    actions.onPageRangeChange?.(val, res);
+                }
+            });
+        });
+        lines.push(() => termGap());
+    }
 
     if (directDownload) {
         lines.push(
@@ -671,4 +711,573 @@ export async function renderDone({ directDownload, pageCount, report, notice }, 
     );
 
     await renderLines(lines);
+}
+
+let activeArrangeView = null;
+
+/**
+ * Renders the multi-file and page arrangement screen.
+ * Supports smooth in-place reordering (with FLIP transitions) without full-terminal re-rendering.
+ *
+ * @param {Object} options
+ * @param {Array<any>} options.items
+ * @param {boolean} options.allPdfs
+ * @param {'merge'|'batch'} options.mode
+ * @param {(from: number, targetId: string, position: 'before'|'after') => void} options.onInsert
+ * @param {(from: number, to: number) => void} options.onReorder
+ * @param {(stackId: string) => void} options.onExpand
+ * @param {(stackId: string) => void} options.onCollapse
+ * @param {(mode: 'merge'|'batch') => void} options.onSetMode
+ * @param {() => void} options.onProceed
+ * @param {() => void} options.onSelectFile
+ * @param {() => void} options.onReset
+ */
+export async function renderArrangeScreen({
+    items,
+    allPdfs,
+    mode,
+    canUndo = false,
+    onInsert,
+    onReorder,
+    onDelete,
+    onUndo,
+    onExpand,
+    onCollapse,
+    onSetMode,
+    onProceed,
+    onSelectFile,
+    onReset,
+}) {
+    termStopSpinner();
+    setAccent('var(--accent)');
+    setMood('idle');
+
+    if (activeArrangeView && activeArrangeView.isMounted()) {
+        activeArrangeView.update({
+            items,
+            allPdfs,
+            mode,
+            canUndo,
+            onInsert,
+            onReorder,
+            onDelete,
+            onUndo,
+            onExpand,
+            onCollapse,
+            onSetMode,
+            onProceed,
+            onSelectFile,
+            onReset,
+        });
+        return true;
+    }
+
+    let currentHandlers = {
+        onInsert,
+        onReorder,
+        onDelete,
+        onUndo,
+        onExpand,
+        onCollapse,
+        onSetMode,
+        onProceed,
+        onSelectFile,
+        onReset,
+    };
+    let currentItems = items;
+    let currentMode = mode;
+    let currentCanUndo = canUndo;
+    let grid = null;
+    let caret = null;
+    let filesPagesEl = null;
+    let mergeOpt = null;
+    let batchOpt = null;
+    let undoOpt = null;
+    let draggedIndex = null;
+    let currentInsertSlot = null;
+
+    const hideCaret = () => {
+        if (caret) caret.style.display = 'none';
+        currentInsertSlot = null;
+    };
+
+    function updateOptionText(el, key, text) {
+        if (!el) return;
+        const textNode = el.lastChild;
+        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+            textNode.nodeValue = ' ' + text;
+        }
+        el._ariaBase = text;
+        el.setAttribute('aria-label', text);
+    }
+
+    function setUndoEnabled(enabled) {
+        if (!undoOpt) return;
+        undoOpt.classList.toggle('tl-disabled', !enabled);
+        undoOpt.style.opacity = enabled ? '1' : '0.35';
+        undoOpt.style.cursor = enabled ? 'pointer' : 'default';
+        undoOpt.style.pointerEvents = enabled ? 'auto' : 'none';
+    }
+
+    function updateCardDeleteButton(card, item, currentList) {
+        const thumbWrap = card.querySelector('.tl-arrange-thumb-wrap');
+        if (!thumbWrap) return;
+        let delBtn = thumbWrap.querySelector('.tl-arrange-delete');
+        if (currentList.length > 1) {
+            if (!delBtn) {
+                delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.className = 'tl-arrange-delete';
+                delBtn.title = t.deleteItem || 'Delete';
+                delBtn.setAttribute('aria-label', t.deleteItem || 'Delete');
+                delBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5"></line><line x1="8.5" y1="1.5" x2="1.5" y2="8.5"></line></svg>';
+                delBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    currentHandlers.onDelete?.(item.id);
+                });
+                thumbWrap.appendChild(delBtn);
+            }
+        } else if (delBtn) {
+            delBtn.remove();
+        }
+    }
+
+    function updateCollapseButton(card, item, currentList) {
+        if (item.type !== 'pdf-page') return;
+        let collapseAction = card.querySelector('.tl-arrange-action');
+        const isFirstOfStack = currentList.find((it) => it.type === 'pdf-page' && it.stackId === item.stackId) === item;
+        const eligible = isFirstOfStack && canCollapsePdf(currentList, item.stackId);
+
+        if (eligible) {
+            if (!collapseAction) {
+                collapseAction = document.createElement('div');
+                collapseAction.className = 'tl-arrange-action';
+                collapseAction.textContent = `[-] ${t.arrangeCollapse}`;
+                collapseAction.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    currentHandlers.onCollapse?.(item.stackId);
+                });
+                card.appendChild(collapseAction);
+            }
+        } else if (collapseAction) {
+            collapseAction.remove();
+        }
+    }
+
+    function createCard(item, index) {
+        const card = document.createElement('div');
+        card.className = 'tl-arrange-item';
+        if (item.type === 'pdf-stack') {
+            card.classList.add('tl-arrange-stack');
+        }
+        card.draggable = true;
+        card.setAttribute('data-id', item.id);
+        card.setAttribute('data-index', String(index));
+
+        card.addEventListener('dragstart', (e) => {
+            const idx = parseInt(card.getAttribute('data-index'), 10);
+            draggedIndex = idx;
+            e.dataTransfer.setData('text/plain', String(idx));
+            e.dataTransfer.effectAllowed = 'move';
+            card.classList.add('dragging');
+        });
+
+        card.addEventListener('dragend', () => {
+            draggedIndex = null;
+            card.classList.remove('dragging');
+            hideCaret();
+        });
+
+        card.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        card.addEventListener('drop', (e) => {
+            e.preventDefault();
+        });
+
+        const thumbWrap = document.createElement('div');
+        thumbWrap.className = 'tl-arrange-thumb-wrap';
+
+        if (item.thumbUrl) {
+            const img = document.createElement('img');
+            img.className = 'tl-arrange-thumb';
+            img.src = item.thumbUrl;
+            img.alt = item.name;
+            thumbWrap.appendChild(img);
+        } else if (item.type === 'pdf-page' && item.pdfDoc) {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'tl-arrange-placeholder';
+            placeholder.textContent = '[..]';
+            thumbWrap.appendChild(placeholder);
+
+            renderPdfPageThumbnail(item.pdfDoc, item.pageNumber).then((url) => {
+                if (url && placeholder.parentNode === thumbWrap) {
+                    item.thumbUrl = url;
+                    placeholder.remove();
+                    const img = document.createElement('img');
+                    img.className = 'tl-arrange-thumb';
+                    img.src = url;
+                    img.alt = item.name;
+                    thumbWrap.appendChild(img);
+                }
+            });
+        } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'tl-arrange-placeholder';
+            placeholder.textContent = '[..]';
+            thumbWrap.appendChild(placeholder);
+        }
+
+        const badge = document.createElement('span');
+        badge.className = 'tl-arrange-badge';
+        if (item.type === 'pdf-stack') {
+            badge.textContent = `${item.pageCount}p`;
+        } else if (item.type === 'pdf-page') {
+            badge.textContent = `p.${item.pageNumber}`;
+        } else {
+            badge.textContent = 'IMG';
+        }
+        thumbWrap.appendChild(badge);
+        card.appendChild(thumbWrap);
+
+        const nameLabel = document.createElement('div');
+        nameLabel.className = 'tl-arrange-name';
+        nameLabel.textContent = item.name;
+        nameLabel.title = item.name;
+        card.appendChild(nameLabel);
+
+        if (item.type === 'pdf-stack') {
+            const expandAction = document.createElement('div');
+            expandAction.className = 'tl-arrange-action';
+            expandAction.textContent = `[+] ${t.arrangeExpand}`;
+            expandAction.addEventListener('click', (e) => {
+                e.stopPropagation();
+                currentHandlers.onExpand?.(item.id);
+            });
+            card.appendChild(expandAction);
+
+            card.addEventListener('click', () => {
+                currentHandlers.onExpand?.(item.id);
+            });
+        }
+
+        updateCollapseButton(card, item, currentItems);
+        updateCardDeleteButton(card, item, currentItems);
+
+        return card;
+    }
+
+    const findInsertionSlot = (clientX, clientY) => {
+        const cardElements = Array.from(grid.querySelectorAll('.tl-arrange-item'));
+        if (cardElements.length === 0) return null;
+
+        const gridRect = grid.getBoundingClientRect();
+
+        // Group cards by visual rows based on top position
+        const rows = [];
+        let currentRow = [];
+        for (let i = 0; i < cardElements.length; i++) {
+            const el = cardElements[i];
+            const rect = el.getBoundingClientRect();
+            if (currentRow.length === 0) {
+                currentRow.push({ index: i, rect });
+            } else {
+                const firstInRow = currentRow[0];
+                if (Math.abs(rect.top - firstInRow.rect.top) < 15) {
+                    currentRow.push({ index: i, rect });
+                } else {
+                    rows.push(currentRow);
+                    currentRow = [{ index: i, rect }];
+                }
+            }
+        }
+        if (currentRow.length > 0) {
+            rows.push(currentRow);
+        }
+
+        // Determine which row clientY belongs to
+        let targetRow = rows[0];
+        if (clientY < rows[0][0].rect.top) {
+            targetRow = rows[0];
+        } else if (clientY > rows[rows.length - 1][0].rect.bottom) {
+            targetRow = rows[rows.length - 1];
+        } else {
+            for (let r = 0; r < rows.length; r++) {
+                const rowTop = rows[r][0].rect.top;
+                const rowBottom = rows[r][0].rect.bottom;
+                if (clientY >= rowTop - 10 && clientY <= rowBottom + 10) {
+                    targetRow = rows[r];
+                    break;
+                }
+            }
+        }
+
+        const rowTop = targetRow[0].rect.top;
+        const rowHeight = targetRow[0].rect.height;
+
+        // Find insertion position within targetRow
+        let slot = null;
+        let caretX = null;
+
+        const firstCard = targetRow[0];
+        const lastCard = targetRow[targetRow.length - 1];
+
+        if (clientX < firstCard.rect.left + firstCard.rect.width / 2) {
+            slot = firstCard.index;
+            caretX = firstCard.rect.left - 6;
+        } else if (clientX >= lastCard.rect.left + lastCard.rect.width / 2) {
+            slot = lastCard.index + 1;
+            caretX = lastCard.rect.right + 6;
+        } else {
+            for (let j = 0; j < targetRow.length - 1; j++) {
+                const cardA = targetRow[j];
+                const cardB = targetRow[j + 1];
+                const midA = cardA.rect.left + cardA.rect.width / 2;
+                const midB = cardB.rect.left + cardB.rect.width / 2;
+                if (clientX >= midA && clientX < midB) {
+                    slot = cardB.index;
+                    caretX = (cardA.rect.right + cardB.rect.left) / 2;
+                    break;
+                }
+            }
+        }
+
+        if (slot === null) {
+            slot = lastCard.index + 1;
+            caretX = lastCard.rect.right + 6;
+        }
+
+        const x = caretX - gridRect.left + grid.scrollLeft;
+        const y = rowTop - gridRect.top + grid.scrollTop;
+
+        return { slot, x, y, height: rowHeight };
+    };
+
+    function update(opts) {
+        currentHandlers = {
+            onInsert: opts.onInsert ?? currentHandlers.onInsert,
+            onReorder: opts.onReorder ?? currentHandlers.onReorder,
+            onDelete: opts.onDelete ?? currentHandlers.onDelete,
+            onUndo: opts.onUndo ?? currentHandlers.onUndo,
+            onExpand: opts.onExpand ?? currentHandlers.onExpand,
+            onCollapse: opts.onCollapse ?? currentHandlers.onCollapse,
+            onSetMode: opts.onSetMode ?? currentHandlers.onSetMode,
+            onProceed: opts.onProceed ?? currentHandlers.onProceed,
+            onSelectFile: opts.onSelectFile ?? currentHandlers.onSelectFile,
+            onReset: opts.onReset ?? currentHandlers.onReset,
+        };
+
+        const newItems = opts.items || currentItems;
+        currentItems = newItems;
+
+        if (opts.canUndo !== undefined) {
+            currentCanUndo = opts.canUndo;
+        }
+        setUndoEnabled(currentCanUndo);
+
+        if (opts.mode !== undefined) {
+            currentMode = opts.mode;
+            if (mergeOpt) updateOptionText(mergeOpt, 'm', (currentMode === 'merge' ? '* ' : '  ') + t.modeMerge);
+            if (batchOpt) updateOptionText(batchOpt, 'b', (currentMode === 'batch' ? '* ' : '  ') + t.modeBatch);
+        }
+
+        if (filesPagesEl) {
+            const totalPages = totalPageCount(newItems);
+            const fileCount = new Set(newItems.map((it) => it.file)).size;
+            filesPagesEl.textContent = t.arrangeFilesPages
+                .replace('{}', String(fileCount))
+                .replace('{}', String(totalPages));
+        }
+
+        if (!grid) return;
+
+        // FLIP: Record first positions
+        const existingCards = Array.from(grid.querySelectorAll('.tl-arrange-item'));
+        const cardMap = new Map();
+        const firstRects = new Map();
+
+        for (const card of existingCards) {
+            const id = card.getAttribute('data-id');
+            if (id) {
+                cardMap.set(id, card);
+                firstRects.set(id, card.getBoundingClientRect());
+            }
+        }
+
+        // Remove cards no longer present in newItems
+        const newItemIds = new Set(newItems.map((it) => it.id));
+        for (const [id, card] of cardMap.entries()) {
+            if (!newItemIds.has(id)) {
+                card.remove();
+                cardMap.delete(id);
+            }
+        }
+
+        // Place cards in updated order
+        newItems.forEach((item, index) => {
+            let card = cardMap.get(item.id);
+            if (!card) {
+                card = createCard(item, index);
+                cardMap.set(item.id, card);
+            } else {
+                card.setAttribute('data-index', String(index));
+                updateCollapseButton(card, item, newItems);
+                updateCardDeleteButton(card, item, newItems);
+            }
+            grid.appendChild(card);
+        });
+
+        if (caret) grid.appendChild(caret);
+
+        // FLIP: Invert and Play
+        const movedCards = [];
+        newItems.forEach((item) => {
+            const firstRect = firstRects.get(item.id);
+            if (firstRect) {
+                const card = cardMap.get(item.id);
+                if (card) {
+                    const lastRect = card.getBoundingClientRect();
+                    const dx = firstRect.left - lastRect.left;
+                    const dy = firstRect.top - lastRect.top;
+                    if (dx !== 0 || dy !== 0) {
+                        card.style.transform = `translate(${dx}px, ${dy}px)`;
+                        card.style.transition = 'none';
+                        movedCards.push(card);
+                    }
+                }
+            }
+        });
+
+        if (movedCards.length > 0) {
+            grid.offsetHeight; // Force reflow
+            requestAnimationFrame(() => {
+                movedCards.forEach((card) => {
+                    card.style.transition = 'transform 180ms cubic-bezier(0.2, 0, 0, 1)';
+                    card.style.transform = '';
+                });
+                setTimeout(() => {
+                    movedCards.forEach((card) => {
+                        card.style.transition = '';
+                    });
+                }, 200);
+            });
+        }
+    }
+
+    activeArrangeView = {
+        get grid() { return grid; },
+        isMounted() {
+            return grid !== null && grid.isConnected;
+        },
+        update,
+    };
+
+    const totalPages = totalPageCount(items);
+    const fileCount = new Set(items.map((it) => it.file)).size;
+
+    const lines = [
+        () => termStatus(t.arrangeTitle, 'tl-ok'),
+        () => termText(t.arrangeHint, 'tl-dim'),
+        () => {
+            filesPagesEl = termText(
+                t.arrangeFilesPages
+                    .replace('{}', String(fileCount))
+                    .replace('{}', String(totalPages)),
+                'tl-dim',
+            );
+        },
+        () => {
+            const gridContainer = termLine();
+            grid = document.createElement('div');
+            grid.className = 'tl-arrange-grid';
+            gridContainer.appendChild(grid);
+
+            caret = document.createElement('div');
+            caret.className = 'tl-arrange-caret';
+            grid.appendChild(caret);
+
+            grid.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+
+                const target = findInsertionSlot(e.clientX, e.clientY);
+                if (target) {
+                    currentInsertSlot = target.slot;
+                    caret.style.display = 'block';
+                    caret.style.left = `${Math.round(target.x)}px`;
+                    caret.style.top = `${Math.round(target.y)}px`;
+                    caret.style.height = `${Math.round(target.height)}px`;
+                }
+            });
+
+            grid.addEventListener('dragleave', (e) => {
+                if (!grid.contains(e.relatedTarget)) {
+                    hideCaret();
+                }
+            });
+
+            grid.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                let slot = currentInsertSlot;
+                if (slot === null) {
+                    const fallback = findInsertionSlot(e.clientX, e.clientY);
+                    if (fallback) slot = fallback.slot;
+                }
+                hideCaret();
+
+                const draggedEl = grid.querySelector('.tl-arrange-item.dragging');
+                if (draggedEl) draggedEl.classList.remove('dragging');
+
+                const fromStr = e.dataTransfer.getData('text/plain');
+                const fromIdx = fromStr !== '' ? parseInt(fromStr, 10) : draggedIndex;
+
+                if (!isNaN(fromIdx) && slot !== null) {
+                    if (slot === fromIdx || slot === fromIdx + 1) {
+                        return;
+                    }
+                    if (currentHandlers.onInsert) {
+                        currentHandlers.onInsert(fromIdx, slot);
+                    } else if (currentHandlers.onReorder) {
+                        currentHandlers.onReorder(fromIdx, slot > fromIdx ? slot - 1 : slot);
+                    }
+                }
+            });
+
+            items.forEach((item, index) => {
+                const card = createCard(item, index);
+                grid.appendChild(card);
+            });
+        },
+        () => termGap(),
+    ];
+
+    if (allPdfs) {
+        lines.push(
+            () => {
+                mergeOpt = termOption('m', (mode === 'merge' ? '* ' : '  ') + t.modeMerge, () => currentHandlers.onSetMode('merge'));
+            },
+            () => {
+                batchOpt = termOption('b', (mode === 'batch' ? '* ' : '  ') + t.modeBatch, () => currentHandlers.onSetMode('batch'));
+            },
+            () => termGap(),
+        );
+    }
+
+    lines.push(
+        () => focusDefault(termOption('enter', t.proceed, () => currentHandlers.onProceed())),
+        () => {
+            undoOpt = termOption('u', t.undo, () => currentHandlers.onUndo?.());
+            setUndoEnabled(currentCanUndo);
+        },
+        () => termOption('f', t.changeFile, () => currentHandlers.onSelectFile()),
+        () => termOption('0', t.reset, () => currentHandlers.onReset()),
+        () => termGap(),
+        () => termCaret(),
+    );
+
+    return renderLines(lines);
 }

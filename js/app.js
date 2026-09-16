@@ -3,7 +3,7 @@
 // Everything runs in the browser — the file never leaves the page.
 
 import { t } from './i18n.js';
-import { pdfjsLib, PDFDocument, vendorReady, vendorState, canRaster } from './vendor.js';
+import { pdfjsLib, PDFDocument, JSZip, vendorReady, vendorState, canRaster } from './vendor.js';
 import { onSchemeChange } from './theme.js';
 import { keepText, keepNonScans, pageLayout, removeMarks } from './settings.js';
 import {
@@ -13,7 +13,7 @@ import {
     PORTRAIT_HEIGHT,
     CSS_PX_PER_PT,
 } from './config.js';
-import { extractImages, compositePage } from './pdf/extract.js';
+import { extractImages, compositePage, extractSinglePdfPage } from './pdf/extract.js';
 import { createNewPdf, cleanSavePdf, sheetFor, pointsPerPixel, keptPageNumbers } from './pdf/build.js';
 import { surveyDocument, imagelessPageCount } from './pdf/preflight.js';
 import { stripMarks } from './pdf/strip.js';
@@ -34,12 +34,24 @@ import {
     renderLoading,
     renderUnavailable,
     renderDone,
+    renderArrangeScreen,
     sampleUpdate,
     sampleEstimate,
     setMood,
     toggleSettings,
     openSettings,
 } from './screens.js';
+import {
+    buildArrangeItems,
+    expandPdfStack,
+    collapsePdfPages,
+    insertAt,
+    removeItem,
+    canCollapsePdf,
+    flattenToPages,
+    releaseArrangeThumbs,
+    destroyArrangePdfs,
+} from './arrange.js';
 import { installKeyboard } from './keyboard.js';
 import { installDragAndDrop } from './dragdrop.js';
 import { createSampleScheduler } from './sampleScheduler.js';
@@ -55,7 +67,7 @@ const fileInput = document.getElementById('fileInput');
 
 const state = {
     fileName: '',
-    // booting | blocked (libraries missing) | init | password | sample |
+    // booting | blocked (libraries missing) | init | password | arrange | sample |
     // processing | downloading | done
     stage: 'booting',
     session: null,      // the opened source — see below
@@ -72,6 +84,13 @@ const state = {
     sampleImage: null,  // page 1 under the settings as they currently stand
     sampleSource: null, // its pixels before the encoder, kept for the next pass
     report: null,       // the account the output screen prints
+    arrangeItems: [],   // multi-file arrange items
+    arrangeHistory: [], // undo history stack for arrange items
+    arrangeRedoStack: [], // redo history stack for arrange items
+    allPdfs: false,     // whether all picked files are PDFs
+    mergeMode: 'merge', // 'merge' | 'batch'
+    pageRangeInput: '', // user raw input for page range
+    pageRange: null,    // parsed page range
 };
 
 // === Cancellation ===
@@ -225,6 +244,20 @@ function showInit(error) {
 // failed comes back here without closing it — and reopening it would ask for
 // the password a second time to reach a screen that was one keypress away.
 function proceed() {
+    if (state.stage === 'arrange') {
+        if (state.allPdfs && state.mergeMode === 'batch') {
+            runBatch(Array.from(fileInput.files));
+        } else {
+            const pages = flattenToPages(state.arrangeItems);
+            state.session = {
+                isMerge: true,
+                items: state.arrangeItems,
+                pages,
+            };
+            startSample();
+        }
+        return;
+    }
     if (state.session) startSample();
     else handleFileSelection();
 }
@@ -269,6 +302,10 @@ function showDone(directDownload, notice = null) {
         downloadZip: downloadAsZip,
         changeSettings,
         reset: () => reset(),
+        onPageRangeChange: (inputVal, parsed) => {
+            state.pageRangeInput = inputVal;
+            state.pageRange = parsed.valid ? parsed : null;
+        },
     });
 }
 
@@ -295,6 +332,8 @@ function discardResult() {
     state.pageCount = 0;
     state.doneMode = null;
     state.report = null;
+    state.pageRangeInput = '';
+    state.pageRange = null;
 }
 
 // The way back from a finished run: the settings are read while a file is being
@@ -321,6 +360,15 @@ function reset({ keepFile = false } = {}) {
         fileInput.value = '';
         state.fileName = '';
     }
+    releaseArrangeThumbs();
+    destroyArrangePdfs(state.arrangeItems);
+    state.arrangeItems = [];
+    state.arrangeHistory = [];
+    state.arrangeRedoStack = [];
+    state.allPdfs = false;
+    state.mergeMode = 'merge';
+    state.pageRange = null;
+    state.pageRangeInput = '';
     closeSession();
     discardResult();
     releasePreviewUrl();
@@ -333,9 +381,26 @@ function reset({ keepFile = false } = {}) {
 
 // === Downloads ===
 
-function downloadPdf() {
+async function downloadPdf() {
     if (!state.pdfBlob) return;
-    saveFile(state.pdfBlob, state.pdfName);
+    if (state.pageRange && !state.pageRange.isAll && state.pageRange.pages.length > 0) {
+        try {
+            state.stage = 'downloading';
+            startProgress(t.downloading);
+            const srcDoc = await PDFDocument.load(await state.pdfBlob.arrayBuffer());
+            const subDoc = await PDFDocument.create();
+            const copied = await subDoc.copyPages(srcDoc, state.pageRange.pages);
+            copied.forEach((p) => subDoc.addPage(p));
+            const subBlob = await cleanSavePdf(subDoc);
+            saveFile(subBlob, state.pdfName);
+            showDone(state.doneMode === 'direct');
+        } catch (err) {
+            console.error('Failed to extract page range from PDF:', err);
+            showDone(state.doneMode === 'direct', t.saveFailed);
+        }
+    } else {
+        saveFile(state.pdfBlob, state.pdfName);
+    }
 }
 
 async function downloadAsImages() {
@@ -344,14 +409,15 @@ async function downloadAsImages() {
     startProgress(t.downloading);
     let notice = null;
     try {
-        await downloadImages(state.images, baseNameOf(state.fileName), reporter(t.downloading));
+        let imgs = state.images;
+        if (state.pageRange && !state.pageRange.isAll && state.pageRange.pages.length > 0) {
+            imgs = state.pageRange.pages.map((idx) => state.images[idx]).filter(Boolean);
+        }
+        await downloadImages(imgs, baseNameOf(state.fileName), reporter(t.downloading));
     } catch (err) {
         // A cancelled page-by-page save keeps whatever already landed; the rest
         // simply never starts, and the output screen still has all three formats
         if (err !== CANCELLED) {
-            // Reported rather than rethrown: nobody awaits this, so a rejection
-            // would go nowhere and leave the run on the progress screen with
-            // the spinner turning and no way out but a reload
             console.error('Saving images failed:', err);
             notice = t.saveFailed;
         }
@@ -365,10 +431,11 @@ async function downloadAsZip() {
     startProgress(t.zipping);
     let notice = null;
     try {
-        await downloadZip(state.images, baseNameOf(state.fileName), reporter(t.zipping));
-        // Zipping reports from inside JSZip, so the cancel lands there; this
-        // only catches a cancel asked for after the last update but before the
-        // file was handed to the browser
+        let imgs = state.images;
+        if (state.pageRange && !state.pageRange.isAll && state.pageRange.pages.length > 0) {
+            imgs = state.pageRange.pages.map((idx) => state.images[idx]).filter(Boolean);
+        }
+        await downloadZip(imgs, baseNameOf(state.fileName), reporter(t.zipping));
         checkpoint();
     } catch (err) {
         if (err !== CANCELLED) {
@@ -380,22 +447,18 @@ async function downloadAsZip() {
 }
 
 // === The source, opened once ===
-//
-// The sample and the run that follows it read the same file, and on the PDF
-// path opening it is the expensive half — the buffer, pdf.js's parse, and the
-// part that must not happen twice: the password. So the source is opened once,
-// held for as long as the file is the one on screen, and closed when the file
-// is let go. A session is `{ pdf, buffer }` for a PDF and `{ files }` for
-// picked images, which have nothing to open.
 
 function closeSession() {
     const session = state.session;
     state.session = null;
+    if (session?.isMerge) {
+        sample.invalidate();
+        releaseArrangeThumbs();
+        destroyArrangePdfs(session.items);
+        return;
+    }
     if (!session?.pdf) return;
     sample.invalidate();
-    // Destroying a document a sample is still reading does not fail that read,
-    // it leaves it pending for good — so the close waits for the page in flight
-    // while whoever asked for it carries straight on
     sample.settled().then(() => session.pdf.destroy());
 }
 
@@ -465,6 +528,7 @@ async function openSession(files, current = () => true) {
 }
 
 function sessionPageCount(session) {
+    if (session.isMerge) return session.pages.length;
     return session.pdf ? session.pdf.numPages : session.files.length;
 }
 
@@ -477,6 +541,19 @@ function sessionPageCount(session) {
  * bitmap, which is what makes the *second* look cheap; see `encodeSample`.
  */
 async function firstPageImage(session) {
+    if (session.isMerge) {
+        const first = session.pages[0];
+        if (!first) return null;
+        if (first.type === 'image') {
+            const [image] = await processImageFiles(
+                [first.file], null, { keepSource: true },
+            );
+            return image || null;
+        } else if (first.type === 'pdf-page') {
+            return await extractSinglePdfPage(first.pdf, first.pageNumber, { keepSource: true });
+        }
+        return null;
+    }
     if (!session.pdf) {
         const [image] = await processImageFiles(
             session.files.slice(0, 1), null, { keepSource: true },
@@ -580,7 +657,8 @@ function paintSample() {
  */
 function encodeSample(session, source) {
     if (!source) return firstPageImage(session);
-    return rasterize(source, { orient: !session.pdf });
+    const isImageFirst = session.isMerge ? session.pages[0]?.type === 'image' : !session.pdf;
+    return rasterize(source, { orient: isImageFirst });
 }
 
 function releaseSampleSource() {
@@ -690,6 +768,78 @@ async function startSample() {
  */
 let pickGeneration = 0;
 
+function pushArrangeHistory() {
+    if (!state.arrangeHistory) state.arrangeHistory = [];
+    state.arrangeHistory.push(state.arrangeItems.slice());
+    if (state.arrangeHistory.length > 50) {
+        state.arrangeHistory.shift();
+    }
+    state.arrangeRedoStack = [];
+}
+
+async function showArrange() {
+    state.stage = 'arrange';
+    termStopSpinner();
+    setAccent('var(--accent)');
+    setMood('idle');
+    const shown = await renderArrangeScreen({
+        items: state.arrangeItems,
+        allPdfs: state.allPdfs,
+        mode: state.mergeMode,
+        canUndo: (state.arrangeHistory?.length || 0) > 0,
+        canRedo: (state.arrangeRedoStack?.length || 0) > 0,
+        onInsert: (fromIdx, targetIdx) => {
+            pushArrangeHistory();
+            state.arrangeItems = insertAt(state.arrangeItems, fromIdx, targetIdx);
+            showArrange();
+        },
+        onReorder: (fromIdx, targetIdx) => {
+            pushArrangeHistory();
+            state.arrangeItems = insertAt(state.arrangeItems, fromIdx, targetIdx);
+            showArrange();
+        },
+        onDelete: (itemId) => {
+            if (state.arrangeItems.length <= 1) return;
+            pushArrangeHistory();
+            state.arrangeItems = removeItem(state.arrangeItems, itemId);
+            showArrange();
+        },
+        onUndo: () => {
+            if (state.arrangeHistory && state.arrangeHistory.length > 0) {
+                if (!state.arrangeRedoStack) state.arrangeRedoStack = [];
+                state.arrangeRedoStack.push(state.arrangeItems.slice());
+                state.arrangeItems = state.arrangeHistory.pop();
+                showArrange();
+            }
+        },
+        onRedo: () => {
+            if (state.arrangeRedoStack && state.arrangeRedoStack.length > 0) {
+                if (!state.arrangeHistory) state.arrangeHistory = [];
+                state.arrangeHistory.push(state.arrangeItems.slice());
+                state.arrangeItems = state.arrangeRedoStack.pop();
+                showArrange();
+            }
+        },
+        onExpand: (stackId) => {
+            pushArrangeHistory();
+            state.arrangeItems = expandPdfStack(state.arrangeItems, stackId);
+            showArrange();
+        },
+        onCollapse: (stackId) => {
+            pushArrangeHistory();
+            state.arrangeItems = collapsePdfPages(state.arrangeItems, stackId);
+            showArrange();
+        },
+        onSetMode: (mode) => {
+            state.mergeMode = mode;
+            showArrange();
+        },
+        onProceed: proceed,
+        onSelectFile: () => fileInput.click(),
+        onReset: () => reset(),
+    });
+}
+
 async function handleFileSelection() {
     if (state.stage === 'booting') return;
     const pick = ++pickGeneration;
@@ -698,6 +848,11 @@ async function handleFileSelection() {
     // A new pick supersedes whatever was open; nothing below it survives
     closeSession();
     discardResult();
+    releaseArrangeThumbs();
+    destroyArrangePdfs(state.arrangeItems);
+    state.arrangeItems = [];
+    state.arrangeHistory = [];
+    state.arrangeRedoStack = [];
     state.stage = 'processing';
     setAccent('var(--accent)');
     setMood('idle');
@@ -728,20 +883,29 @@ async function handleFileSelection() {
     }
     if (!current()) return;
 
+    if (files.length > 1) {
+        const { items, allPdfs } = await buildArrangeItems(files, reporter(t.extracting));
+        if (!current()) {
+            destroyArrangePdfs(items);
+            return;
+        }
+        if (items.length === 0) {
+            abortWith(t.failed);
+            return;
+        }
+        state.arrangeItems = items;
+        state.allPdfs = allPdfs;
+        state.mergeMode = 'merge';
+        showArrange();
+        return;
+    }
+
     const session = await openSession(files, current);
     if (!session) return;
-    // Superseded while the file was being opened. The pick that replaced this
-    // one has a session of its own, so this document is not going to be
-    // installed — and nothing else holds it, so this is its only chance to be
-    // closed. Left open it would keep its worker and its pages alive for the
-    // life of the page.
     if (!current()) {
         session.pdf?.destroy();
         return;
     }
-    // Opening is the one stretch with no checkpoints in it — reading the file
-    // and parsing it take no progress callback — so the answer is honoured on
-    // the way out instead, the same way `saveCancellably` honours it
     if (cancelRequested) {
         session.pdf?.destroy();
         abortWith(t.cancelled);
@@ -764,8 +928,118 @@ async function startRun() {
         abortWith(t.cancelled);
         return;
     }
-    if (state.session.pdf) runPdf(state.session);
+    if (state.session.isMerge) runMerge(state.session);
+    else if (state.session.pdf) runPdf(state.session);
     else runImages(state.session.files);
+}
+
+async function runMerge(session) {
+    try {
+        const pages = session.pages;
+        const total = pages.length;
+        const extractedImages = [];
+
+        for (let i = 0; i < total; i++) {
+            checkpoint();
+            const pageItem = pages[i];
+            reporter(t.extracting)(i + 1, total);
+
+            if (pageItem.type === 'image') {
+                let bmp = null;
+                try {
+                    bmp = await createImageBitmap(pageItem.file);
+                    const { blob, width, height } = await rasterize(bmp, { orient: true });
+                    extractedImages.push({
+                        page: i + 1, blob, width, height, texts: [],
+                    });
+                } finally {
+                    if (bmp) closeBitmap(bmp);
+                }
+            } else if (pageItem.type === 'pdf-page') {
+                const pageImage = await extractSinglePdfPage(pageItem.pdf, pageItem.pageNumber);
+                pageImage.page = i + 1;
+                extractedImages.push(pageImage);
+            }
+        }
+
+        if (extractedImages.length === 0) {
+            abortWith(t.noImages);
+            return;
+        }
+
+        checkpoint();
+        termUpdateProgress(t.saving);
+        const newPdf = await createNewPdf(extractedImages, {
+            onProgress: reporter(t.processing),
+        });
+        finishProcessing(await saveCancellably(newPdf), extractedImages, false, {
+            sourceIsMerge: true,
+        });
+    } catch (err) {
+        if (err === CANCELLED) {
+            abortWith(t.cancelled);
+        } else {
+            console.error('Merge processing failed:', err);
+            abortWith(t.failed);
+        }
+    }
+}
+
+async function runBatch(files) {
+    state.stage = 'processing';
+    startProgress(t.processing);
+    try {
+        const zip = new JSZip();
+        for (let i = 0; i < files.length; i++) {
+            checkpoint();
+            const file = files[i];
+            const msg = t.batchCleaning.replace('{}', String(i + 1)).replace('{}', String(files.length));
+            termUpdateProgress(msg);
+
+            const buffer = await readAsArrayBuffer(file);
+            const loadingTask = pdfjsLib.getDocument({
+                data: buffer.slice(0),
+                disableFontFace: true,
+                isEvalSupported: false,
+                verbosity: 0,
+            });
+            const pdf = await loadingTask.promise;
+            const imgs = await extractImages(pdf, { pdfBytes: buffer });
+
+            let cleanedBlob = null;
+            if (imgs === false) {
+                const originalPdfDoc = await PDFDocument.load(buffer);
+                if (removeMarks()) stripMarks(originalPdfDoc);
+                cleanedBlob = await cleanSavePdf(originalPdfDoc);
+            } else if (imgs.length > 0) {
+                const newPdf = await createNewPdf(imgs, {});
+                cleanedBlob = await cleanSavePdf(newPdf);
+            }
+
+            if (cleanedBlob) {
+                zip.file(file.name, cleanedBlob);
+            }
+            pdf.destroy();
+        }
+
+        checkpoint();
+        termUpdateProgress(t.zipping);
+        const zipBlob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+            checkpoint();
+            termUpdateProgress(`${t.zipping} ${Math.round(metadata.percent)}%`);
+        });
+
+        saveFile(zipBlob, 'cleaned_batch.zip');
+        state.pageCount = files.length;
+        showDone(true);
+    } catch (err) {
+        if (err === CANCELLED) {
+            abortWith(t.cancelled);
+        } else {
+            console.error('Batch clean failed:', err);
+            abortWith(t.failed);
+        }
+    }
 }
 
 // Encrypted PDFs. pdf.js asks by calling `onPassword`, and waits for
@@ -1032,7 +1306,7 @@ function finishProcessing(newPdfBlob, extractedImages, directDownload, source = 
 // knowing where the files came from.
 
 installDragAndDrop({
-    enabled: () => state.stage === 'init' || state.stage === 'sample' || state.stage === 'done',
+    enabled: () => state.stage === 'init' || state.stage === 'arrange' || state.stage === 'sample' || state.stage === 'done',
     onFiles: (files) => {
         // Load the picker from the drop, so a dropped file is indistinguishable
         // from a picked one everywhere else
@@ -1064,6 +1338,26 @@ installKeyboard({
     downloadZip: downloadAsZip,
     cancel: requestCancel,
     reset: () => reset(),
+    getAllPdfs: () => state.allPdfs,
+    setArrangeMode: (m) => { state.mergeMode = m; showArrange(); },
+    canUndo: () => (state.arrangeHistory?.length || 0) > 0,
+    undo: () => {
+        if (state.arrangeHistory && state.arrangeHistory.length > 0) {
+            if (!state.arrangeRedoStack) state.arrangeRedoStack = [];
+            state.arrangeRedoStack.push(state.arrangeItems.slice());
+            state.arrangeItems = state.arrangeHistory.pop();
+            showArrange();
+        }
+    },
+    canRedo: () => (state.arrangeRedoStack?.length || 0) > 0,
+    redo: () => {
+        if (state.arrangeRedoStack && state.arrangeRedoStack.length > 0) {
+            if (!state.arrangeHistory) state.arrangeHistory = [];
+            state.arrangeHistory.push(state.arrangeItems.slice());
+            state.arrangeItems = state.arrangeRedoStack.pop();
+            showArrange();
+        }
+    },
 });
 
 // tinyko's tool follows the colour scheme, so redraw it on a switch

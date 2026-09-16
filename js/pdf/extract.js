@@ -717,3 +717,60 @@ export async function extractImages(pdf, { pdfBytes, onProgress, limit, keepSour
     }
     return extractedImages;
 }
+
+/**
+ * Extracts a single page from a PDF as a pageImage ({ page, blob, width, height, texts }).
+ * Used when combining individual PDF pages into a merged document.
+ *
+ * @param {any} pdf - pdf.js document proxy
+ * @param {number} curPage - 1-based page number
+ * @param {Object} [options]
+ * @param {boolean} [options.keepSource]
+ * @returns {Promise<{ page: number, blob: Blob, width: number, height: number, texts: any[], source?: any }>}
+ */
+export async function extractSinglePdfPage(pdf, curPage, { keepSource = false } = {}) {
+    const page = await pdf.getPage(curPage);
+    const annotationMode = pdfjsLib.AnnotationMode.DISABLE;
+    const marks = readPageMarks(await page.getOperatorList({ annotationMode }));
+    const [boxX0, boxY0, boxX1, boxY1] = page.view;
+    const pageWidth = Math.abs(boxX1 - boxX0);
+    const pageHeight = Math.abs(boxY1 - boxY0);
+    const pageArea = pageWidth * pageHeight;
+
+    const laidOut = isBornDigital(marks);
+    const candidate = laidOut ? null : pickPageImage(marks.images, pageArea, null);
+    const inPieces = !laidOut && !candidate &&
+        totalCoverage(marks.images, pageArea) >= MIN_PAGE_COVERAGE;
+    const textContent = candidate || inPieces ? await page.getTextContent() : null;
+
+    const imageMatrix = candidate
+        ? candidate.matrix
+        : [pageWidth, 0, 0, pageHeight, Math.min(boxX0, boxX1), Math.min(boxY0, boxY1)];
+
+    let bitmap = null;
+    let pageImage = null;
+    try {
+        if (candidate) {
+            bitmap = await decodedImage(page, candidate);
+        } else {
+            const { maxWidth, maxHeight } = rasterLimits();
+            const scale = renderScale(
+                marks.images, pageWidth, pageHeight, Math.max(maxWidth, maxHeight),
+            );
+            bitmap = await compositePage(page, scale, annotationMode);
+        }
+        const { blob, width, height } = await rasterize(bitmap);
+        pageImage = {
+            page: curPage, blob, width, height,
+            texts: collectTextItems(textContent, imageMatrix),
+        };
+        if (keepSource) {
+            pageImage.source = candidate ? await createImageBitmap(bitmap) : bitmap;
+            if (!candidate) bitmap = null;
+        }
+    } finally {
+        if (bitmap && !candidate) closeBitmap(bitmap);
+        page.cleanup();
+    }
+    return pageImage;
+}

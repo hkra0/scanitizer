@@ -53,7 +53,7 @@ export function installDragAndDrop({ enabled, onFiles, onRejected }) {
     });
 
     document.addEventListener('drop', (e) => {
-        if (!enabled()) return;
+        if (!enabled() || !e.dataTransfer?.types.includes('Files')) return;
         e.preventDefault();
         depth = 0;
         setDragging(false);

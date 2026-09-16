@@ -1,0 +1,11 @@
+{
+  "name": "scanitizer",
+  "version": "1.0.0",
+  "description": "Scanned PDF cleanup in the browser. Fully client-side.",
+  "type": "module",
+  "scripts": {
+    "build:offline": "node scripts/build-offline.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "MIT"
+}

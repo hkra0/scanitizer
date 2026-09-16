@@ -158,6 +158,19 @@ export const canRaster =
 // Awaited before the first getDocument call: the worker must be pinned before
 // pdf.js starts.
 export const pdfjsReady = (async () => {
+    if (typeof window !== 'undefined' && window.__SCANITIZER_OFFLINE__) {
+        if (window.pdfjsLib && window.__SCANITIZER_WORKER_CODE__) {
+            pdfjsLib = window.pdfjsLib;
+            try {
+                const blob = new Blob([window.__SCANITIZER_WORKER_CODE__], { type: 'application/javascript' });
+                pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+                return true;
+            } catch (err) {
+                console.warn('pdf.js offline worker could not be started:', err);
+                return false;
+            }
+        }
+    }
     try {
         pdfjsLib = await importPdfjs();
     } catch (err) {
@@ -169,6 +182,9 @@ export const pdfjsReady = (async () => {
 })();
 
 export const pdfLibReady = scriptReady('lib-pdflib', 'PDFLib').then((ok) => {
+    if (!ok && typeof window !== 'undefined' && window.__SCANITIZER_OFFLINE__ && window.PDFLib) {
+        ok = true;
+    }
     if (!ok) return false;
     PDFLib = window.PDFLib;
     ({

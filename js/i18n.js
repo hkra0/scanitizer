@@ -108,6 +108,8 @@ const langPack = {
         pageRangeOutOfRange: "out of range (max {})",
         undo: "undo",
         deleteItem: "delete",
+        offlineDownload: "offline edition",
+        offlineBadge: "offline edition",
     },
     zh: {
         selectFile: "选择 PDF 或图片",
@@ -216,6 +218,8 @@ const langPack = {
         pageRangeOutOfRange: "超出总页数 (最多 {} 页)",
         undo: "撤销",
         deleteItem: "删除",
+        offlineDownload: "离线单文件版",
+        offlineBadge: "离线单文件版",
     },
 };
 

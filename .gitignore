@@ -36,6 +36,7 @@ dist/
 build/
 *.tmp
 *.temp
+scripts/vendor_cache/
 
 # The regression corpus is real documents — see test/corpus/README.md.
 # The README itself is kept; nothing else in there ever is.

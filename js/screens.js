@@ -108,6 +108,18 @@ export async function boot() {
     link.rel = 'noopener';
     link.textContent = 'Github';
     linkEl.appendChild(link);
+    linkEl.appendChild(document.createTextNode(' · '));
+    if (typeof window !== 'undefined' && window.__SCANITIZER_OFFLINE__) {
+        const badge = document.createElement('span');
+        badge.textContent = t.offlineBadge;
+        linkEl.appendChild(badge);
+    } else {
+        const offLink = document.createElement('a');
+        offLink.href = 'scanitizer-offline.html';
+        offLink.download = 'scanitizer.html';
+        offLink.textContent = t.offlineDownload;
+        linkEl.appendChild(offLink);
+    }
     await delay(TERM_DELAY);
     termGap(header);
 

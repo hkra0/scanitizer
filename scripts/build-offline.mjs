@@ -152,15 +152,15 @@ ${safeStyle(baseCss)}
 ${safeStyle(termCss)}
     </style>
 
-    <script id="lib-pdflib">
+    <script id="lib-pdflib" data-cfasync="false">
 ${safeScript(pdfLibJs)}
     </script>
 
-    <script id="lib-jszip">
+    <script id="lib-jszip" data-cfasync="false">
 ${safeScript(jszipJs)}
     </script>
 
-    <script id="lib-pdfjs">
+    <script id="lib-pdfjs" data-cfasync="false">
 ${safeScript(pdfJsBundle)}
     </script>
 </head>
@@ -176,12 +176,12 @@ ${safeScript(pdfJsBundle)}
         </div>
     </div>
 
-    <script id="lib-scanitizer-offline-config">
+    <script id="lib-scanitizer-offline-config" data-cfasync="false">
 window.__SCANITIZER_OFFLINE__ = true;
 window.__SCANITIZER_WORKER_CODE__ = ${safeScript(workerJson)};
     </script>
 
-    <script id="app-bundle">
+    <script id="app-bundle" data-cfasync="false">
 ${safeScript(appJsBundle)}
     </script>
 </body>
